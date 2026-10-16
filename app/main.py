@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import json
 import mimetypes
@@ -14,9 +15,8 @@ from urllib.parse import quote
 
 import httpx
 import psutil
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import HTMLResponse, Response
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 APP_DIR = Path(__file__).parent
@@ -29,19 +29,47 @@ PVE_CA_CERT = os.getenv("PVE_CA_CERT", "/etc/pve/pve-root-ca.pem")
 PVE_TLS_VERIFY = os.getenv("PVE_TLS_VERIFY", "true").lower() not in {"0", "false", "no"}
 APP_USER = os.getenv("APP_USER", "")
 APP_PASSWORD = os.getenv("APP_PASSWORD", "")
+APP_SESSION_SECRET = os.getenv("APP_SESSION_SECRET") or APP_PASSWORD
+SESSION_COOKIE = "proxmox_controller_session"
+SESSION_TTL = 12 * 60 * 60
 
 app = FastAPI(title="ProxmoxController", docs_url=None, redoc_url=None)
-security = HTTPBasic()
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 _CACHE: dict[str, tuple[float, Any]] = {}
 
 
-def require_login(credentials: HTTPBasicCredentials = Depends(security)) -> str:
-    user_ok = hmac.compare_digest(credentials.username.encode(), APP_USER.encode())
-    password_ok = hmac.compare_digest(credentials.password.encode(), APP_PASSWORD.encode())
-    if not APP_USER or not APP_PASSWORD or not (user_ok and password_ok):
-        raise HTTPException(status_code=401, detail="Anmeldung erforderlich", headers={"WWW-Authenticate": "Basic"})
-    return credentials.username
+def _session_signature(timestamp: str) -> str:
+    message = f"{APP_USER}:{timestamp}".encode()
+    return hmac.new(APP_SESSION_SECRET.encode(), message, hashlib.sha256).hexdigest()
+
+
+def is_authenticated(request: Request) -> bool:
+    if not APP_USER or not APP_PASSWORD or not APP_SESSION_SECRET:
+        return False
+    value = request.cookies.get(SESSION_COOKIE, "")
+    try:
+        timestamp, signature = value.split(".", 1)
+        created = int(timestamp)
+    except (ValueError, TypeError):
+        return False
+    now = int(time.time())
+    if created > now + 30 or now - created > SESSION_TTL:
+        return False
+    return hmac.compare_digest(signature, _session_signature(timestamp))
+
+
+def require_login(request: Request) -> str:
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Anmeldung erforderlich")
+    return APP_USER
+
+
+def login_page(error: str = "") -> str:
+    page = (APP_DIR / "static" / "login.html").read_text(encoding="utf-8")
+    if not APP_USER or not APP_PASSWORD:
+        error = "APP_USER und APP_PASSWORD sind noch nicht in /etc/default/proxmox-controller gesetzt."
+    message = f'<div class="login-error" role="alert">{error}</div>' if error else ""
+    return page.replace("<!--LOGIN_ERROR-->", message)
 
 
 def _pve_client() -> httpx.Client:
@@ -196,8 +224,42 @@ def guest_file_operation(kind: str, vmid: int, operation: str, path: str, data: 
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(_: str = Depends(require_login)) -> str:
-    return (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
+def index(request: Request) -> Response:
+    if not is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
+    return HTMLResponse((APP_DIR / "static" / "index.html").read_text(encoding="utf-8"))
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request) -> Response:
+    if is_authenticated(request):
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse(login_page())
+
+
+@app.post("/login")
+def login(request: Request, username: str = Form(...), password: str = Form(...)) -> Response:
+    user_ok = hmac.compare_digest(username.encode(), APP_USER.encode())
+    password_ok = hmac.compare_digest(password.encode(), APP_PASSWORD.encode())
+    if not APP_USER or not APP_PASSWORD or not (user_ok and password_ok):
+        return HTMLResponse(login_page("Benutzername oder Passwort ist falsch."), status_code=401)
+    timestamp = str(int(time.time()))
+    value = f"{timestamp}.{_session_signature(timestamp)}"
+    response = RedirectResponse("/", status_code=303)
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    response.set_cookie(
+        SESSION_COOKIE, value, max_age=SESSION_TTL, httponly=True,
+        secure=request.url.scheme == "https" or forwarded_proto == "https",
+        samesite="lax", path="/",
+    )
+    return response
+
+
+@app.post("/logout")
+def logout() -> Response:
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
 
 
 @app.get("/api/overview")

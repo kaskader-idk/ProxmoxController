@@ -11,13 +11,14 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Sequence
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 import psutil
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 APP_DIR = Path(__file__).parent
 MAX_VM_FILE_BYTES = int(os.getenv("MAX_VM_FILE_BYTES", str(8 * 1024**2)))
@@ -32,10 +33,75 @@ APP_PASSWORD = os.getenv("APP_PASSWORD", "")
 APP_SESSION_SECRET = os.getenv("APP_SESSION_SECRET") or APP_PASSWORD
 SESSION_COOKIE = "proxmox_controller_session"
 SESSION_TTL = 12 * 60 * 60
+AI_SETTINGS_PATH = Path(os.getenv("AI_SETTINGS_PATH", "/var/lib/proxmox-controller/ai-settings.json"))
+
+
+class GuestCommandRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=4096)
+
+
+class AISettingsRequest(BaseModel):
+    base_url: str = Field(min_length=1, max_length=512)
+    model: str = Field(min_length=1, max_length=200)
+    api_key: str = Field(default="", max_length=4096)
+    clear_api_key: bool = False
+
+
+class AIChatRequest(BaseModel):
+    messages: list[dict[str, Any]] = Field(min_length=1, max_length=80)
+
 
 app = FastAPI(title="ProxmoxController", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 _CACHE: dict[str, tuple[float, Any]] = {}
+_RATE_STATE: dict[str, tuple[float, Any]] = {}
+
+
+def rate(value: float, key: str, now: float) -> float:
+    previous = _RATE_STATE.get(key)
+    _RATE_STATE[key] = (now, value)
+    if not previous:
+        return 0.0
+    elapsed = now - previous[0]
+    return max(0.0, (value - previous[1]) / elapsed) if elapsed > 0 else 0.0
+
+
+def cpu_temperatures() -> list[dict[str, Any]]:
+    try:
+        sensors = psutil.sensors_temperatures()
+    except (AttributeError, OSError):
+        sensors = {}
+    readings = []
+    for sensor_name, entries in sensors.items():
+        name = sensor_name.lower()
+        if any(skip in name for skip in ("nvidia", "gpu", "nvme", "acpitz")):
+            continue
+        for index, entry in enumerate(entries):
+            label = entry.label or f"{sensor_name} {index + 1}"
+            if "core" in name or "cpu" in name or "core" in label.lower() or "package" in label.lower():
+                if entry.current is not None:
+                    readings.append({"label": label, "celsius": round(float(entry.current), 1)})
+        if readings:
+            break
+    return readings
+
+
+def host_io_rates() -> dict[str, Any]:
+    now = time.monotonic()
+    disk = psutil.disk_io_counters()
+    disk_data = {
+        "read_bytes_sec": rate(float(disk.read_bytes), "disk-read", now) if disk else 0.0,
+        "write_bytes_sec": rate(float(disk.write_bytes), "disk-write", now) if disk else 0.0,
+    }
+    network = []
+    for name, counter in (psutil.net_io_counters(pernic=True) or {}).items():
+        if name == "lo":
+            continue
+        rx = rate(float(counter.bytes_recv), f"net-rx:{name}", now)
+        tx = rate(float(counter.bytes_sent), f"net-tx:{name}", now)
+        network.append({"name": name, "rx_bytes_sec": rx, "tx_bytes_sec": tx})
+    return {"disk_io": disk_data, "network": network}
+
 
 
 def _session_signature(timestamp: str) -> str:
@@ -318,6 +384,11 @@ def overview(_: str = Depends(require_login)) -> dict[str, Any]:
                               **psutil.disk_usage(part.mountpoint)._asdict()})
             except (OSError, psutil.Error):
                 continue
+        try:
+            frequencies = psutil.cpu_freq(percpu=True) or []
+            cpu_frequencies = [round(float(item.current), 0) if item and item.current else None for item in frequencies]
+        except (AttributeError, OSError, psutil.Error):
+            cpu_frequencies = []
         host = cached("host-slow", 5, lambda: {
             "memory": psutil.virtual_memory()._asdict(),
             "disks": disks,
@@ -325,9 +396,22 @@ def overview(_: str = Depends(require_login)) -> dict[str, Any]:
             "gpu": command(["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"]),
             "packages": command(["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Status}\n"]),
         })
+        cpu_count = len(core_percent) or psutil.cpu_count(logical=True) or 1
+        memory = host.get("memory", {})
+        assigned_vcpus = sum(int(g.get("cores", 0)) for g in guest_rows)
+        assigned_memory = sum(int(g.get("memory_configured", 0)) for g in guest_rows)
+        io_rates = host_io_rates()
         return {"node_name": PVE_NODE, "node": node, "guests": guest_rows, "storages": storages,
-                "host": {**host, "cpu_percent": sum(core_percent) / len(core_percent) if core_percent else 0,
-                         "cpu_cores_percent": core_percent, "cpu_cores": len(core_percent) or psutil.cpu_count(logical=True) or 1}}
+                "reservations": {
+                    "vcpus_assigned": assigned_vcpus, "vcpus_capacity": cpu_count,
+                    "vcpus_free": max(0, cpu_count - assigned_vcpus), "vcpus_overcommitted": max(0, assigned_vcpus - cpu_count),
+                    "memory_assigned": assigned_memory, "memory_capacity": int(memory.get("total", 0)),
+                    "memory_unallocated": max(0, int(memory.get("total", 0)) - assigned_memory),
+                    "memory_available": int(memory.get("available", 0)),
+                },
+                "host": {**host, **io_rates, "cpu_temperature": cpu_temperatures(), "cpu_frequencies_mhz": cpu_frequencies,
+                         "cpu_percent": sum(core_percent) / len(core_percent) if core_percent else 0,
+                         "cpu_cores_percent": core_percent, "cpu_cores": cpu_count}}
     except HTTPException:
         raise
     except (KeyError, ValueError, OSError) as exc:

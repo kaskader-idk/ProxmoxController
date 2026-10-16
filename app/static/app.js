@@ -2,7 +2,8 @@ const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAl
 let state = null, packages = [], loading = false, activeGuest = null, currentPath = '/', packageSuggestionCache = new Map(), lastPackageSearch = '', packageSearchToken = 0;
 const titles = {overview:'Systemübersicht',guests:'CTs & VMs',storage:'Speicher & Laufwerke',packages:'Installationen'};
 function esc(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function bytes(n){n=Number(n)||0;if(n<1)return '—';const u=['B','KB','MB','GB','TB','PB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return `${n.toFixed(i?1:0)} ${u[i]}`;}\nfunction bytesRate(n){return bytes(n)+'/s';}
+function bytes(n){n=Number(n)||0;if(n<1)return '—';const u=['B','KB','MB','GB','TB','PB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return `${n.toFixed(i?1:0)} ${u[i]}`;}
+function bytesRate(n){return bytes(n)+'/s';}
 function pct(n){return Math.max(0,Math.min(100,Number(n)||0));}
 function meter(p){return `<div class="meter"><i style="width:${pct(p)}%"></i></div>`;}
 function status(s){const on=s==='running';return `<span class="status ${on?'':'stopped'}">${on?'Läuft':s==='paused'?'Pausiert':'Gestoppt'}</span>`;}

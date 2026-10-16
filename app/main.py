@@ -1,24 +1,27 @@
 from __future__ import annotations
 
+import base64
 import hmac
 import json
+import mimetypes
 import os
-import shutil
 import socket
 import subprocess
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
+from urllib.parse import quote
 
 import httpx
 import psutil
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
 APP_DIR = Path(__file__).parent
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/var/lib/proxmox-controller/uploads")).resolve()
-MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+MAX_VM_FILE_BYTES = int(os.getenv("MAX_VM_FILE_BYTES", str(8 * 1024**2)))
+MAX_CT_FILE_BYTES = int(os.getenv("MAX_CT_FILE_BYTES", str(512 * 1024**2)))
 PVE_API = os.getenv("PVE_API", "https://127.0.0.1:8006/api2/json").rstrip("/")
 PVE_NODE = os.getenv("PVE_NODE", socket.gethostname())
 PVE_TOKEN = os.getenv("PVE_API_TOKEN", "")
@@ -30,6 +33,7 @@ APP_PASSWORD = os.getenv("APP_PASSWORD", "")
 app = FastAPI(title="ProxmoxController", docs_url=None, redoc_url=None)
 security = HTTPBasic()
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
+_CACHE: dict[str, tuple[float, Any]] = {}
 
 
 def require_login(credentials: HTTPBasicCredentials = Depends(security)) -> str:
@@ -44,32 +48,39 @@ def _pve_client() -> httpx.Client:
     if not PVE_TOKEN:
         raise HTTPException(status_code=503, detail="PVE_API_TOKEN ist nicht konfiguriert")
     verify: bool | str = PVE_CA_CERT if PVE_TLS_VERIFY and Path(PVE_CA_CERT).exists() else PVE_TLS_VERIFY
-    return httpx.Client(
-        base_url=PVE_API,
-        headers={"Authorization": f"PVEAPIToken={PVE_TOKEN}"},
-        verify=verify,
-        timeout=8.0,
-    )
+    return httpx.Client(base_url=PVE_API, headers={"Authorization": f"PVEAPIToken={PVE_TOKEN}"}, verify=verify, timeout=8.0)
 
 
-def pve(path: str, method: str = "GET") -> Any:
+def pve(path: str, method: str = "GET", *, params: dict[str, Any] | None = None,
+        form: Sequence[tuple[str, str]] | None = None) -> Any:
     try:
         with _pve_client() as client:
-            response = client.request(method, path)
+            response = client.request(method, path, params=params, data=form)
             response.raise_for_status()
             payload = response.json()
             return payload.get("data", payload)
     except HTTPException:
         raise
     except httpx.HTTPStatusError as exc:
-        detail = "Proxmox API Anfrage fehlgeschlagen"
+        detail = f"Proxmox API HTTP {exc.response.status_code}"
         try:
-            detail = exc.response.json().get("errors", detail)
+            payload = exc.response.json()
+            detail = payload.get("message") or payload.get("errors") or detail
         except Exception:
             pass
         raise HTTPException(status_code=502, detail=detail) from exc
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(status_code=502, detail=f"Proxmox API nicht erreichbar: {exc}") from exc
+
+
+def cached(key: str, seconds: float, fn):
+    now = time.monotonic()
+    item = _CACHE.get(key)
+    if item and now - item[0] < seconds:
+        return item[1]
+    value = fn()
+    _CACHE[key] = (time.monotonic(), value)
+    return value
 
 
 def command(args: list[str], timeout: int = 12) -> str:
@@ -90,14 +101,98 @@ def host_disks() -> list[dict[str, Any]]:
         return []
 
 
-def files_in_uploads() -> list[dict[str, Any]]:
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    items = []
-    for path in sorted(UPLOAD_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-        if path.is_file():
-            stat = path.stat()
-            items.append({"name": path.name, "size": stat.st_size, "modified": stat.st_mtime})
-    return items
+def all_guests() -> list[dict[str, Any]]:
+    return pve("/cluster/resources?type=vm")
+
+
+def guest_for(kind: str, vmid: int) -> dict[str, Any]:
+    if kind not in {"qemu", "lxc"}:
+        raise HTTPException(status_code=400, detail="Ungültiger Gasttyp")
+    guest = next((g for g in all_guests() if int(g.get("vmid", -1)) == vmid), None)
+    is_lxc = bool(guest and guest.get("type") == "lxc")
+    if not guest or (kind == "lxc") != is_lxc:
+        raise HTTPException(status_code=404, detail="CT/VM nicht gefunden")
+    if guest.get("status") != "running":
+        raise HTTPException(status_code=409, detail="Dateibrowser nur bei laufendem CT/VM verfügbar")
+    return guest
+
+
+def guest_path(path: str) -> str:
+    if not path.startswith("/") or "\x00" in path or any(part == ".." for part in path.split("/")):
+        raise HTTPException(status_code=400, detail="Ungültiger Dateipfad")
+    return "/" + "/".join(part for part in path.split("/") if part and part != ".")
+
+
+LIST_SCRIPT = (
+    "import os,sys,json,stat; p=sys.argv[1]; out=[]; "
+    "[(lambda s,n: out.append({'name':n,'kind':'dir' if stat.S_ISDIR(s.st_mode) else 'file' if stat.S_ISREG(s.st_mode) else 'other','size':s.st_size,'modified':s.st_mtime}))(os.lstat(os.path.join(p,n)),n) for n in os.listdir(p)]; "
+    "print(json.dumps({'path':p,'entries':sorted(out,key=lambda x:(x['kind']!='dir',x['name'].lower()))}))"
+)
+READ_SCRIPT = "import sys,base64; print(base64.b64encode(open(sys.argv[1],'rb').read()).decode())"
+WRITE_SCRIPT = "import sys; f=open(sys.argv[1],'xb'); f.write(sys.stdin.buffer.read()); f.close()"
+
+
+def qga_exec(node: str, vmid: int, argv: list[str], stdin: bytes | None = None) -> bytes:
+    endpoint = f"/nodes/{node}/qemu/{vmid}/agent/exec"
+    form = [("command", arg) for arg in argv] + [("capture-output", "1")]
+    if stdin is not None:
+        form.append(("input-data", base64.b64encode(stdin).decode("ascii")))
+    result = pve(endpoint, method="POST", form=form)
+    pid = result.get("pid")
+    if pid is None:
+        raise HTTPException(status_code=502, detail="QEMU Guest Agent lieferte keine Prozess-ID")
+    status = None
+    for _ in range(50):
+        status = pve(f"/nodes/{node}/qemu/{vmid}/agent/exec-status", params={"pid": pid})
+        if status.get("exited"):
+            break
+        time.sleep(0.1)
+    if not status or not status.get("exited"):
+        raise HTTPException(status_code=504, detail="Befehl im Gast hat das Zeitlimit überschritten")
+    out = base64.b64decode(status.get("out-data", ""))
+    if status.get("exitcode", 0) != 0:
+        error = base64.b64decode(status.get("err-data", "")).decode("utf-8", "replace")
+        raise HTTPException(status_code=400, detail=error or "Dateioperation im Gast fehlgeschlagen")
+    return out
+
+
+def ct_helper(operation: str, vmid: int, path: str, data: bytes | None = None) -> bytes:
+    helper = Path("/opt/ProxmoxController/scripts/pct_files.py")
+    if not helper.is_file():
+        raise HTTPException(status_code=503, detail="CT-Dateihilfe fehlt; Repository-Updates einspielen")
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "/usr/bin/python3", str(helper), operation, str(vmid), path],
+            input=data, capture_output=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(status_code=502, detail=f"CT-Dateihilfe nicht verfügbar: {exc}") from exc
+    if result.returncode:
+        detail = result.stderr.decode("utf-8", "replace").strip() or "CT-Dateioperation fehlgeschlagen"
+        raise HTTPException(status_code=400, detail=detail)
+    return result.stdout
+
+
+def guest_file_operation(kind: str, vmid: int, operation: str, path: str, data: bytes | None = None) -> bytes:
+    guest = guest_for(kind, vmid)
+    path = guest_path(path)
+    if kind == "lxc":
+        return ct_helper(operation, vmid, path, data)
+    node = str(guest.get("node") or PVE_NODE)
+    if operation == "list":
+        return qga_exec(node, vmid, ["python3", "-c", LIST_SCRIPT, path])
+    if operation == "read":
+        encoded = qga_exec(node, vmid, ["python3", "-c", READ_SCRIPT, path])
+        try:
+            raw = base64.b64decode(encoded.strip(), validate=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail="Ungültige Dateidaten vom Gast") from exc
+        if len(raw) > MAX_VM_FILE_BYTES:
+            raise HTTPException(status_code=413, detail=f"VM-Dateien sind auf {MAX_VM_FILE_BYTES // 1024**2} MiB begrenzt")
+        return raw
+    if operation == "write":
+        return qga_exec(node, vmid, ["python3", "-c", WRITE_SCRIPT, path], data)
+    raise HTTPException(status_code=400, detail="Ungültige Dateioperation")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -109,48 +204,51 @@ def index(_: str = Depends(require_login)) -> str:
 def overview(_: str = Depends(require_login)) -> dict[str, Any]:
     try:
         node = pve(f"/nodes/{PVE_NODE}/status")
-        guests = pve("/cluster/resources?type=vm")
-        storages = pve(f"/nodes/{PVE_NODE}/storage")
+        guests = all_guests()
+        storages = cached(f"storage:{PVE_NODE}", 15, lambda: pve(f"/nodes/{PVE_NODE}/storage"))
         guest_rows = []
         for guest in guests:
             row = dict(guest)
             kind = "lxc" if guest.get("type") == "lxc" else "qemu"
-            config = pve(f"/nodes/{guest.get('node', PVE_NODE)}/{kind}/{guest['vmid']}/config")
+            config = cached(
+                f"config:{guest.get('node', PVE_NODE)}:{kind}:{guest['vmid']}", 30,
+                lambda g=guest, k=kind: pve(f"/nodes/{g.get('node', PVE_NODE)}/{k}/{g['vmid']}/config"),
+            )
             row["cores"] = int(config.get("cores", 1)) * int(config.get("sockets", 1))
             row["memory_configured"] = int(config.get("memory", 0)) * 1024**2
             row["disk_configured"] = config.get("rootfs", config.get("scsi0", config.get("virtio0", "")))
             row["status"] = guest.get("status", "unknown")
             guest_rows.append(row)
-        return {
-            "node_name": PVE_NODE,
-            "node": node,
-            "guests": guest_rows,
-            "storages": storages,
-            "host": {
-                "cpu_percent": psutil.cpu_percent(interval=0.15),
-                "cpu_cores": psutil.cpu_count(logical=True) or 1,
-                "memory": psutil.virtual_memory()._asdict(),
-                "disks": [
-                    {"device": p.device, "mountpoint": p.mountpoint, "fstype": p.fstype, **psutil.disk_usage(p.mountpoint)._asdict()}
-                    for p in psutil.disk_partitions(all=False)
-                ],
-                "block_devices": host_disks(),
-                "gpu": command(["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"]),
-                "packages": command(["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Status}\n"]),
-            },
-            "uploads": files_in_uploads(),
-        }
+        core_percent = psutil.cpu_percent(interval=0.10, percpu=True)
+        partitions = cached("partitions", 5, lambda: psutil.disk_partitions(all=False))
+        disks = []
+        for part in partitions:
+            try:
+                disks.append({"device": part.device, "mountpoint": part.mountpoint, "fstype": part.fstype,
+                              **psutil.disk_usage(part.mountpoint)._asdict()})
+            except (OSError, PermissionError):
+                continue
+        host = cached("host-slow", 5, lambda: {
+            "memory": psutil.virtual_memory()._asdict(),
+            "disks": disks,
+            "block_devices": host_disks(),
+            "gpu": command(["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"]),
+            "packages": command(["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Status}\n"]),
+        })
+        return {"node_name": PVE_NODE, "node": node, "guests": guest_rows, "storages": storages,
+                "host": {**host, "cpu_percent": sum(core_percent) / len(core_percent) if core_percent else 0,
+                         "cpu_cores_percent": core_percent, "cpu_cores": len(core_percent) or psutil.cpu_count(logical=True) or 1}}
     except HTTPException:
         raise
     except (KeyError, ValueError, OSError) as exc:
         raise HTTPException(status_code=502, detail=f"Daten konnten nicht geladen werden: {exc}") from exc
 
 
-@app.post("/api/guest/{kind}/{vmid}/{action}")
+@app.post("/api/guest/{kind}/{vmid}/action/{action}")
 def guest_action(kind: str, vmid: int, action: str, _: str = Depends(require_login)) -> dict[str, Any]:
     if kind not in {"qemu", "lxc"} or action not in {"start", "stop", "shutdown", "reboot"}:
         raise HTTPException(status_code=400, detail="Ungültige Aktion")
-    guests = pve("/cluster/resources?type=vm")
+    guests = all_guests()
     guest = next((g for g in guests if int(g.get("vmid", -1)) == vmid), None)
     if not guest or (kind == "lxc") != (guest.get("type") == "lxc"):
         raise HTTPException(status_code=404, detail="CT/VM nicht gefunden")
@@ -158,40 +256,52 @@ def guest_action(kind: str, vmid: int, action: str, _: str = Depends(require_log
     return {"ok": True, "task": task}
 
 
-@app.post("/api/upload")
-async def upload(files: list[UploadFile] = File(...), _: str = Depends(require_login)) -> dict[str, Any]:
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+@app.get("/api/guest/{kind}/{vmid}/files")
+def list_guest_files(kind: str, vmid: int, path: str = Query("/"), _: str = Depends(require_login)) -> dict[str, Any]:
+    raw = guest_file_operation(kind, vmid, "list", path)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=502, detail="Ungültige Dateiliste vom Gast") from exc
+
+
+@app.get("/api/guest/{kind}/{vmid}/file")
+def download_guest_file(kind: str, vmid: int, path: str = Query(...), _: str = Depends(require_login)) -> Response:
+    raw_path = guest_path(path)
+    data = guest_file_operation(kind, vmid, "read", raw_path)
+    filename = Path(raw_path).name or "download"
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return Response(data, media_type=media_type, headers={"Content-Disposition": f"attachment; filename=download; filename*=UTF-8''{quote(filename)}"})
+
+
+@app.post("/api/guest/{kind}/{vmid}/files")
+async def upload_guest_files(kind: str, vmid: int, path: str = Query("/"), files: list[UploadFile] = File(...),
+                             _: str = Depends(require_login)) -> dict[str, Any]:
+    base = guest_path(path)
+    max_size = MAX_CT_FILE_BYTES if kind == "lxc" else MAX_VM_FILE_BYTES
     saved = []
     for file in files:
         name = Path(file.filename or "upload").name
-        if not name or name in {".", ".."}:
+        if not name or name in {".", ".."} or "/" in name or "\\" in name:
             continue
-        target = UPLOAD_DIR / name
-        if target.exists():
-            raise HTTPException(status_code=409, detail=f"Datei existiert bereits: {name}")
+        target = guest_path(f"{base.rstrip('/')}/{name}")
         size = 0
+        chunks = []
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > max_size:
+                await file.close()
+                raise HTTPException(status_code=413, detail=f"{name} überschreitet das Upload-Limit ({max_size // 1024**2} MiB)")
+            chunks.append(chunk)
+        await file.close()
         try:
-            with target.open("xb") as out:
-                while chunk := await file.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > MAX_UPLOAD_BYTES:
-                        raise HTTPException(status_code=413, detail=f"{name} überschreitet das Upload-Limit")
-                    out.write(chunk)
-            saved.append({"name": name, "size": size})
-        except Exception:
-            target.unlink(missing_ok=True)
+            guest_file_operation(kind, vmid, "write", target, b"".join(chunks))
+        except HTTPException as exc:
+            if exc.status_code == 400:
+                exc.detail = f"{name}: {exc.detail} (Dateien werden nicht überschrieben)"
             raise
-        finally:
-            await file.close()
+        saved.append({"name": name, "size": size})
     return {"ok": True, "files": saved}
-
-
-@app.get("/api/files/{name}")
-def download(name: str, _: str = Depends(require_login)) -> FileResponse:
-    path = (UPLOAD_DIR / Path(name).name).resolve()
-    if path.parent != UPLOAD_DIR or not path.is_file():
-        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
-    return FileResponse(path, filename=path.name)
 
 
 if __name__ == "__main__":

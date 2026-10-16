@@ -51,8 +51,21 @@ def fail(message: str, code: int = 1) -> None:
 
 
 def main() -> None:
+    if len(sys.argv) == 2 and sys.argv[1] == "cpusets":
+        try:
+            result = subprocess.run(
+                ["/usr/sbin/pct", "cpusets"],
+                capture_output=True, text=True, timeout=4, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            fail(f"pct cpusets fehlgeschlagen: {exc}")
+        if result.returncode:
+            fail(result.stderr.strip() or "pct cpusets fehlgeschlagen")
+        sys.stdout.write(result.stdout)
+        return
+
     if len(sys.argv) != 4:
-        fail("Aufruf: pct_files.py list|read|write VMID /pfad", 2)
+        fail("Aufruf: pct_files.py list|read|write VMID /pfad oder pct_files.py cpusets", 2)
     op, vmid_text, path = sys.argv[1:]
     if op not in {"list", "read", "write"} or not vmid_text.isdigit() or int(vmid_text) < 100:
         fail("Ungültige Operation oder VMID", 2)

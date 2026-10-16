@@ -1,0 +1,23 @@
+[Unit]
+Description=ProxmoxController web dashboard
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=proxmox-controller
+Group=proxmox-controller
+WorkingDirectory=/opt/ProxmoxController/app
+EnvironmentFile=/etc/default/proxmox-controller
+ExecStart=/opt/ProxmoxController/.venv/bin/uvicorn main:app --host ${HOST} --port ${PORT} --workers 2
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/proxmox-controller
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

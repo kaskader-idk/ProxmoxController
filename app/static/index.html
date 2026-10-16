@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>ProxmoxController</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261016-2">
+  <link rel="stylesheet" href="/static/style.css?v=20261016-3">
 </head>
 <body>
   <aside class="sidebar">
@@ -16,7 +16,7 @@
     <div class="sidebar-bottom"><i class="pulse"></i><span id="connection">Verbinde…</span><small>Proxmox VE · lokal</small></div>
   </aside>
   <main>
-    <header><div><div class="eyebrow">PROXMOX VE / HOST</div><h1 id="page-title">Systemübersicht</h1></div><div class="header-right"><span class="live"><i></i> LIVE</span><span id="updated">Warte auf Daten</span><button class="icon-button" id="refresh" title="Aktualisieren">↻</button></div></header>
+    <header><div><div class="eyebrow">PROXMOX VE / HOST</div><h1 id="page-title">Systemübersicht</h1></div><div class="header-right"><span class="live"><i></i> LIVE</span><span id="updated">Warte auf Daten</span><button class="icon-button" id="refresh" title="Aktualisieren">↻</button><form action="/logout" method="post"><button class="logout-button" type="submit">Abmelden</button></form></div></header>
     <div id="error" class="error hidden"></div>
     <section class="view active" id="view-overview">
       <div class="section-heading"><div><h2 id="node-title">Host</h2><p>Ressourcen in Echtzeit</p></div></div>
@@ -44,5 +44,5 @@
       <p class="explorer-hint">Uploads überschreiben keine vorhandenen Dateien. VM-Dateien: bis 8 MiB. CT-Dateien: bis 512 MiB.</p>
     </section>
   </div>
-  <script src="/static/app.js?v=20261016-2" defer></script>
+  <script src="/static/app.js?v=20261016-3" defer></script>
 </body></html>

@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Run a small, bounded file operation inside one explicitly selected LXC CT."""
+import json
 import subprocess
 import sys
 
@@ -65,10 +66,28 @@ def main() -> None:
         return
 
     if len(sys.argv) != 4:
-        fail("Aufruf: pct_files.py list|read|write VMID /pfad oder pct_files.py cpusets", 2)
+        fail("Aufruf: pct_files.py list|read|write VMID /pfad, command VMID BEFEHL oder cpusets", 2)
     op, vmid_text, path = sys.argv[1:]
-    if op not in {"list", "read", "write"} or not vmid_text.isdigit() or int(vmid_text) < 100:
+    if op not in {"list", "read", "write", "command"} or not vmid_text.isdigit() or int(vmid_text) < 100:
         fail("Ungültige Operation oder VMID", 2)
+
+    if op == "command":
+        if not path.strip() or len(path) > 4096:
+            fail("Leerer oder zu langer Befehl", 2)
+        try:
+            result = subprocess.run(
+                ["/usr/sbin/pct", "exec", vmid_text, "--", "/bin/sh", "-lc", path],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            fail(f"CT-Befehl fehlgeschlagen: {exc}")
+        print(json.dumps({
+            "exit_code": result.returncode,
+            "stdout": result.stdout[-24000:],
+            "stderr": result.stderr[-12000:],
+        }))
+        return
+
     if not path.startswith("/") or "\x00" in path or ".." in path.split("/"):
         fail("Ungültiger Dateipfad", 2)
     try:

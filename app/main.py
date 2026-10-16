@@ -349,6 +349,15 @@ def logout() -> Response:
     return response
 
 
+@app.get("/guest/{kind}/{vmid}", response_class=HTMLResponse)
+def guest_page(kind: str, vmid: int, request: Request) -> Response:
+    if not is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
+    if kind not in {"qemu", "lxc"} or vmid < 100:
+        raise HTTPException(status_code=404, detail="CT/VM nicht gefunden")
+    return HTMLResponse((APP_DIR / "static" / "guest.html").read_text(encoding="utf-8"))
+
+
 @app.get("/api/overview")
 def overview(_: str = Depends(require_login)) -> dict[str, Any]:
     try:

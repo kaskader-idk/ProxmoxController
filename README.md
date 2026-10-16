@@ -1,30 +1,34 @@
 # ProxmoxController
 
-Ein selbst gehostetes Dashboard für einen Proxmox-VE-Host. Host- und Workload-Daten werden etwa einmal pro Sekunde aktualisiert. Häufig abgefragte, langsam veränderliche Daten wie installierte Pakete werden im Backend kurz zwischengespeichert.
+Ein Web-Dashboard für deinen Proxmox-VE-Host. Es zeigt die Auslastung des Hosts und seiner CTs/VMs an und bietet Start-/Stopp-Schaltflächen sowie einen Datei-Explorer für die Gäste.
 
-## Funktionen
+## Das zeigt das Dashboard
 
-- CPU-Auslastung des Hosts und separate Auslastung jedes logischen Kerns
-- Host-RAM, Dateisysteme, Blockgeräte und Proxmox-Storage-Pools
-- NVIDIA-GPU-Auslastung, VRAM und Temperatur, sofern `nvidia-smi` verfügbar
-- CTs und VMs mit Status, CPU-Auslastung, konfigurierten Kernen, RAM und Disk; Starten und Stoppen per Schaltfläche
-- Anklickbare CTs/VMs mit Datei-Explorer, Download und Drag-and-drop-Upload ins Gast-Dateisystem
-- Installierte Debian-Pakete mit Suche
-- HTTP-Basic-Anmeldung für Dashboard und API
-
-Der Dateibrowser funktioniert bei laufenden Gästen. Bei VMs muss der QEMU Guest Agent installiert und in der VM-Konfiguration aktiviert sein. Bei LXC wird `pct exec` über eine sudoers-Regel mit festem Hilfsskript ausgeführt; im CT wird Python 3 benötigt. Vorhandene Dateien werden nicht überschrieben. VM-Dateien sind standardmäßig auf 8 MiB begrenzt. CT-Dateien sind aus Sicherheitsgründen auf höchstens 512 MiB begrenzt. Die Werte können über Umgebungsvariablen reduziert werden. Geräte-Passthrough-GPUs in einer VM können nicht als aktuelle VM-GPU-Auslastung gemessen werden; angezeigt wird die NVIDIA-GPU des Hosts.
+- CPU-Auslastung des Hosts und jedes logischen CPU-Kerns
+- Arbeitsspeicher, GPU-Auslastung (NVIDIA), Dateisysteme, Laufwerke und Proxmox-Storage-Pools
+- Alle CTs und VMs mit Status, CPU, RAM, Disk und konfigurierten Kernen
+- Starten und Stoppen von CTs und VMs
+- Installierte Debian-Pakete auf dem Proxmox-Host
+- Datei-Explorer für laufende CTs und VMs mit Download und Drag-and-drop-Upload
+- Aktualisierung der Live-Daten ungefähr einmal pro Sekunde
 
 ## Voraussetzungen
 
-- Proxmox VE; die Anwendung läuft direkt auf dem PVE-Host.
-- Python 3.11 oder neuer, `sudo`, `dpkg-query` und `lsblk`.
-- Für VM-Dateien: QEMU Guest Agent in der VM installiert und aktiviert.
-- Für CT-Dateien: laufender Container mit Python 3.
-- Ein Proxmox-API-Token und ein starkes Dashboard-Passwort.
+- Proxmox VE 9 oder neuer; installiert wird direkt auf dem Proxmox-Host.
+- Zugriff auf den Host als `root` über Konsole oder SSH.
+- Internetzugriff vom Host, um das Repository und Python-Pakete herunterzuladen.
+- Für VM-Dateien: Linux-VM mit installiertem und aktiviertem QEMU Guest Agent sowie Python 3.
+- Für CT-Dateien: laufender Linux-Container mit Python 3.
 
-## 1. API-Benutzer und Token einrichten
+Der Datei-Explorer zeigt das Dateisystem **des ausgewählten Gasts**, nicht das des Proxmox-Hosts. Die obersten Ordner unter `/` sehen bei Linux-Systemen oft ähnlich aus. Ordner anklicken, um deren Inhalt zu sehen. Dateien werden beim Upload nicht überschrieben. VM-Dateien sind standardmäßig auf 8 MiB begrenzt, CT-Dateien auf maximal 512 MiB.
 
-Auf dem Proxmox-Host als root ausführen. Bei bereits angelegtem Benutzer/Rolle nur fehlende Befehle anwenden.
+## 1. Proxmox-API-Zugriff einrichten
+
+Das Dashboard verwendet einen API-Token. Es braucht kein Proxmox-root-Passwort. Die folgenden Befehle auf dem Proxmox-Host als `root` ausführen.
+
+### Neuen Benutzer, Rolle und Token erstellen
+
+Diese Befehle nur ausführen, wenn Benutzer und Rolle noch nicht angelegt sind:
 
 ```bash
 pveum user add proxmoxcontroller@pve --comment "ProxmoxController Dashboard"
@@ -34,106 +38,229 @@ pveum user token add proxmoxcontroller@pve dashboard --privsep 1
 pveum acl modify / --token 'proxmoxcontroller@pve!dashboard' --role ProxmoxController
 ```
 
-Das Token-Geheimnis wird nur einmal ausgegeben. In `PVE_API_TOKEN` kommt der vollständige Wert im Format `proxmoxcontroller@pve!dashboard=GEHEIMNIS`. Bei einer vorhandenen Rolle das benötigte Guest-Agent-Recht ergänzen:
+Beim Befehl `pveum user token add` zeigt Proxmox einen geheimen Wert an. Kopiere ihn sofort. Er wird später als vollständiger Wert in dieser Form eingetragen:
+
+```text
+proxmoxcontroller@pve!dashboard=HIER_DAS_TOKEN_SECRET
+```
+
+**Das Token-Secret nicht hier in GitHub oder in Chats einfügen.** Wenn du bereits einen API-Benutzer und eine Rolle eingerichtet hast, erstelle keinen zweiten Benutzer. Ergänze nur das Guest-Agent-Recht:
 
 ```bash
 pveum role modify ProxmoxController --privs "Sys.Audit Datastore.Audit VM.Audit VM.PowerMgmt VM.GuestAgent.Unrestricted"
 ```
 
-`VM.GuestAgent.Unrestricted` wird benötigt, damit der Dateibrowser Verzeichnisse in VMs auflisten und Dateien übertragen kann. Damit kann der Token weitreichende Befehle über den QEMU Guest Agent in laufenden VMs ausführen. Den Token und das Dashboard-Passwort daher geheim halten. Das Proxmox-Token erhält keine Rechte zur Änderung der VM-Konfiguration oder Benutzerverwaltung.
+`VM.GuestAgent.Unrestricted` wird für den VM-Datei-Explorer benötigt. Es erlaubt weitreichende Befehle in einer VM, wenn deren Guest Agent läuft. Schütze deshalb das Token und das Dashboard-Passwort. CT-Dateizugriff verwendet eine separate, auf ein Hilfsskript beschränkte sudoers-Regel.
 
-## 2. Repository installieren
+## 2. Repository herunterladen und installieren
+
+Alle Befehle in diesem Abschnitt auf dem Proxmox-Host als `root` ausführen.
+
+### Pakete installieren
+
+```bash
+apt update
+apt install -y git python3 python3-venv python3-pip sudo
+```
+
+### Repository herunterladen
 
 ```bash
 cd /opt
+```
+
+Wenn `/opt/ProxmoxController` **noch nicht existiert**, klone das Repository:
+
+```bash
 git clone https://github.com/kaskader-idk/ProxmoxController.git
+```
+
+Wenn `/opt/ProxmoxController` bereits existiert, zuerst prüfen, ob es ein Git-Checkout ist:
+
+```bash
+test -d /opt/ProxmoxController/.git && echo "Git-Checkout vorhanden" || echo "Kein Git-Checkout"
+```
+
+Bei `Kein Git-Checkout` die alte Mappe zur Sicherheit umbenennen und danach klonen:
+
+```bash
+mv /opt/ProxmoxController "/opt/ProxmoxController-backup-$(date +%s)"
+git clone https://github.com/kaskader-idk/ProxmoxController.git
+```
+
+Dann die Python-Umgebung und Abhängigkeiten einrichten:
+
+```bash
 cd /opt/ProxmoxController
-apt update
-apt install -y python3 python3-venv python3-pip sudo
-useradd --system --home /var/lib/proxmox-controller --create-home --shell /usr/sbin/nologin proxmox-controller
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+### Dienstbenutzer und CT-Dateihilfe installieren
+
+```bash
+getent passwd proxmox-controller >/dev/null || useradd --system --home /var/lib/proxmox-controller --create-home --shell /usr/sbin/nologin proxmox-controller
 install -d -o proxmox-controller -g proxmox-controller /var/lib/proxmox-controller
-python3 -m venv /opt/ProxmoxController/.venv
-/opt/ProxmoxController/.venv/bin/pip install -r requirements.txt
 install -o root -g root -m 755 scripts/pct_files.py /opt/ProxmoxController/scripts/pct_files.py
 install -o root -g root -m 440 sudoers/proxmox-controller /etc/sudoers.d/proxmox-controller
 visudo -cf /etc/sudoers.d/proxmox-controller
 ```
 
-Die sudoers-Regel erlaubt dem Dienstbenutzer nur, das root-eigene CT-Hilfsskript mit Argumenten aufzurufen. Das Skript begrenzt Aktionen auf `list`, `read` und `write` innerhalb eines angegebenen, laufenden Containers.
+Das Skript unter `/opt/ProxmoxController/scripts/pct_files.py` muss root gehören. Die sudoers-Regel erlaubt dem Dashboard-Dienst nur, dieses Skript aufzurufen.
 
-## 3. Konfiguration und Dienst starten
+## 3. Einstellungen eintragen
+
+Konfiguration aus der Vorlage erstellen und öffnen:
 
 ```bash
 cp .env.example /etc/default/proxmox-controller
 nano /etc/default/proxmox-controller
+```
+
+Mindestens diese drei Werte prüfen:
+
+```text
+PVE_NODE=kamilsServer
+PVE_API_TOKEN=proxmoxcontroller@pve!dashboard=HIER_DAS_TOKEN_SECRET
+APP_PASSWORD=HIER_EIN_LANGES_EIGENES_PASSWORT
+```
+
+- `PVE_NODE`: den Namen des Proxmox-Knotens verwenden. Anzeigen mit `hostname` oder in **Datacenter → Nodes**.
+- `PVE_API_TOKEN`: den vollständigen Token-Wert einsetzen, inklusive `=SECRET`.
+- `APP_USER` und `APP_PASSWORD`: Damit meldest du dich am Dashboard an. Passwort selbst wählen.
+- `PVE_CA_CERT`: Zertifikat für die sichere Verbindung zur lokalen Proxmox-API. Standardmäßig `/etc/pve/pve-root-ca.pem`.
+
+Anschließend die Konfigurationsdatei schützen:
+
+```bash
 chmod 600 /etc/default/proxmox-controller
 ```
 
-`PVE_NODE` muss dem Namen unter **Datacenter → Nodes** entsprechen. `PVE_API_TOKEN` und `APP_PASSWORD` ersetzen; für `APP_PASSWORD` ein langes, einzigartiges Passwort verwenden.
+Falls der Dienst beim Start `Permission denied` für `/etc/pve/pve-root-ca.pem` meldet, kopiere das Zertifikat in einen für den Dienst lesbaren Ordner und setze `PVE_CA_CERT` auf den neuen Pfad:
 
 ```bash
-install -m 644 systemd/proxmox-controller.service /etc/systemd/system/proxmox-controller.service
+install -d -o root -g proxmox-controller -m 750 /etc/proxmox-controller
+install -o root -g proxmox-controller -m 640 /etc/pve/pve-root-ca.pem /etc/proxmox-controller/pve-root-ca.pem
+nano /etc/default/proxmox-controller
+```
+
+In der geöffneten Datei dann setzen:
+
+```text
+PVE_CA_CERT=/etc/proxmox-controller/pve-root-ca.pem
+```
+
+## 4. Dienst starten
+
+```bash
+install -d /run/lxc/lock
+install -m 644 /opt/ProxmoxController/systemd/proxmox-controller.service /etc/systemd/system/proxmox-controller.service
 systemctl daemon-reload
 systemctl enable --now proxmox-controller
 systemctl status proxmox-controller
 ```
 
-Dashboard: `http://IP-DES-PROXMOX-HOSTS:8787`. Die Zugangsdaten sind `APP_USER` und `APP_PASSWORD`. Logs: `journalctl -u proxmox-controller -f`.
+Dashboard im Browser öffnen:
 
-## Updates
+```text
+http://IP-DEINES-PROXMOX-HOSTS:8787
+```
 
-Wenn `/opt/ProxmoxController` ein Git-Checkout ist (`test -d .git`), dann:
+Melde dich mit `APP_USER` und `APP_PASSWORD` an. Die IP-Adresse findest du auf dem Proxmox-Host mit `hostname -I`.
+
+## 5. QEMU Guest Agent in VMs einschalten
+
+Damit der Datei-Explorer eine VM öffnen kann, muss dort der QEMU Guest Agent laufen. In Proxmox die VM auswählen, **Options → QEMU Guest Agent** aktivieren und den Guest Agent im Linux-System der VM installieren. Danach die VM starten oder neu starten. Python 3 muss ebenfalls in der VM installiert sein.
+
+## Später aktualisieren
+
+Wenn `/opt/ProxmoxController` ein Git-Checkout ist:
 
 ```bash
 cd /opt/ProxmoxController
-git pull
-/opt/ProxmoxController/.venv/bin/pip install -r requirements.txt
+git pull --ff-only
+.venv/bin/pip install -r requirements.txt
 install -o root -g root -m 755 scripts/pct_files.py /opt/ProxmoxController/scripts/pct_files.py
 install -o root -g root -m 440 sudoers/proxmox-controller /etc/sudoers.d/proxmox-controller
 visudo -cf /etc/sudoers.d/proxmox-controller
 install -m 644 systemd/proxmox-controller.service /etc/systemd/system/proxmox-controller.service
+install -d /run/lxc/lock
 systemctl daemon-reload
 systemctl restart proxmox-controller
 ```
 
-Falls die vorhandene `/opt/ProxmoxController`-Mappe kein `.git` enthält, kann `git pull` dort nicht funktionieren. Mappe erst umbenennen/sichern und dann das Repository sauber klonen.
-
-## Netzwerk und Sicherheit
-
-Der Dienst läuft mit eigenem Linux-Systembenutzer, bindet standardmäßig an `0.0.0.0:8787` und verlangt HTTP-Basic-Anmeldedaten. HTTP-Basic verschlüsselt das Passwort nicht selbst. Stelle den Port nur in einem vertrauenswürdigen LAN oder über Tailscale bereit. Für Zugriff von außerhalb den Dienst hinter einen TLS-Reverse-Proxy setzen und Port 8787 nicht direkt ins Internet weiterleiten. Token und `/etc/default/proxmox-controller` niemals veröffentlichen.
-
-## Konfiguration
-
-| Variable | Standard | Zweck |
-|---|---|---|
-| `PVE_API` | `https://127.0.0.1:8006/api2/json` | Proxmox-API-Basisadresse |
-| `PVE_NODE` | Hostname | Proxmox-Knotenname |
-| `PVE_API_TOKEN` | – | Token im Format `user@realm!id=secret` |
-| `PVE_CA_CERT` | `/etc/pve/pve-root-ca.pem` | CA-Zertifikat für TLS-Prüfung |
-| `PVE_TLS_VERIFY` | `true` | Zertifikatsprüfung aktivieren |
-| `APP_USER` / `APP_PASSWORD` | – | Dashboard-Anmeldung |
-| `MAX_VM_FILE_BYTES` | `8388608` | VM-Dateigröße maximal in Bytes |
-| `MAX_CT_FILE_BYTES` | `536870912` | CT-Dateigröße maximal in Bytes |
-| `HOST` / `PORT` | `0.0.0.0` / `8787` | Webserver-Adresse und Port |
+Die Datei `/etc/default/proxmox-controller` enthält deine Einstellungen und wird durch `git pull` nicht überschrieben.
 
 ## Fehlerbehebung
 
-- `503 PVE_API_TOKEN ist nicht konfiguriert`: `/etc/default/proxmox-controller` prüfen und Dienst neu starten.
-- `502 Proxmox API HTTP 401`: Token-ID und Token-Geheimnis in `PVE_API_TOKEN` kontrollieren.
-- TLS-Fehler: CA-Pfad prüfen. `PVE_TLS_VERIFY=false` nur vorübergehend zum Eingrenzen verwenden.
-- VM-Dateibrowser nicht verfügbar: QEMU Guest Agent installieren und in der VM-Konfiguration aktivieren; dem API-Token muss `VM.GuestAgent.Unrestricted` zugewiesen sein.
-- CT-Dateibrowser meldet sudo-Fehler: sudoers-Datei und root-eigenes Skript anhand der Installationsschritte aktualisieren. Der CT muss laufen und Python 3 enthalten.
-- Start/Stop verweigert: Das Token benötigt `VM.PowerMgmt` und `VM.Audit` auf den betreffenden CTs/VMs.
-- GPU fehlt: `nvidia-smi` als Dienstbenutzer testen. Nur NVIDIA-Karten werden erkannt.
+### `destination path 'ProxmoxController' already exists`
 
-## Aufbau
+Die Mappe existiert bereits. Prüfe, ob es ein Git-Checkout ist:
 
-```text
-app/main.py                  FastAPI, Proxmox-API, Hostdaten und Gast-Dateibrowser
-app/static/index.html        Dashboard-Struktur
-app/static/style.css         Layout und Darstellung
-app/static/app.js            Ein-Sekunden-Aktualisierung und Interaktionen
-scripts/pct_files.py         CT-Dateioperationen über pct exec
-sudoers/proxmox-controller   Erlaubte sudo-Aktion des Dienstbenutzers
-systemd/proxmox-controller.service
+```bash
+test -d /opt/ProxmoxController/.git && echo "git pull verwenden" || echo "Mappe sichern und neu klonen"
 ```
+
+Wenn `.git` existiert, nach `/opt/ProxmoxController` wechseln und `git pull --ff-only` ausführen. Wenn `.git` fehlt, die Mappe umbenennen, wie im Download-Abschnitt beschrieben.
+
+### `Permission denied` bei Proxmox-Daten oder Zertifikat
+
+Zertifikat wie oben beschrieben kopieren. Die Upload-/Arbeitsablage muss dem Dienstbenutzer gehören:
+
+```bash
+install -d -o proxmox-controller -g proxmox-controller /var/lib/proxmox-controller
+```
+
+### Proxmox-API meldet HTTP 401
+
+`PVE_API_TOKEN` in `/etc/default/proxmox-controller` prüfen. Der Wert muss Token-ID und Secret enthalten. Danach:
+
+```bash
+systemctl restart proxmox-controller
+```
+
+### `lxc-attach ... Read-only file system` beim CT-Datei-Explorer
+
+Die systemd-Datei muss diese Zeile enthalten, damit LXC seine Sperrdatei verwenden kann:
+
+```ini
+ReadWritePaths=/var/lib/proxmox-controller /run/lxc/lock
+```
+
+Anwenden:
+
+```bash
+install -d /run/lxc/lock
+systemctl daemon-reload
+systemctl restart proxmox-controller
+```
+
+### VM-Datei-Explorer zeigt einen Guest-Agent-Fehler
+
+Guest Agent in der VM installieren und aktivieren. Prüfen, ob der Proxmox-Rolle `ProxmoxController` das Recht `VM.GuestAgent.Unrestricted` zugewiesen wurde. Der Gast muss außerdem Python 3 enthalten.
+
+### Logs ansehen
+
+```bash
+journalctl -u proxmox-controller -n 100 --no-pager
+journalctl -u proxmox-controller -f
+```
+
+## Netzwerk und Sicherheit
+
+Der Dienst lauscht standardmäßig auf `0.0.0.0:8787` und verlangt Dashboard-Anmeldedaten. HTTP-Basic verschlüsselt das Passwort nicht selbst. Verwende den Port nur im vertrauenswürdigen LAN oder über Tailscale. Für Zugriff aus dem Internet einen TLS-Reverse-Proxy verwenden und Port 8787 nicht direkt öffentlich freigeben. Proxmox-Token, Dashboard-Passwort und `/etc/default/proxmox-controller` geheim halten.
+
+## Einstellbare Werte
+
+| Variable | Standard | Bedeutung |
+|---|---|---|
+| `PVE_API` | `https://127.0.0.1:8006/api2/json` | Adresse der Proxmox-API |
+| `PVE_NODE` | Hostname | Name des Proxmox-Knotens |
+| `PVE_API_TOKEN` | – | Proxmox API-Token |
+| `PVE_CA_CERT` | `/etc/pve/pve-root-ca.pem` | Zertifikat für TLS-Prüfung |
+| `PVE_TLS_VERIFY` | `true` | TLS-Zertifikat überprüfen |
+| `APP_USER` | `admin` | Dashboard-Benutzername |
+| `APP_PASSWORD` | – | Dashboard-Passwort |
+| `MAX_VM_FILE_BYTES` | `8388608` | Maximale VM-Dateigröße in Bytes |
+| `MAX_CT_FILE_BYTES` | `536870912` | Maximale CT-Dateigröße, höchstens 512 MiB |
+| `HOST` / `PORT` | `0.0.0.0` / `8787` | Adresse und Port des Webservers |

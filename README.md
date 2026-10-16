@@ -6,7 +6,8 @@ Ein Web-Dashboard für deinen Proxmox-VE-Host. Es zeigt die Auslastung des Hosts
 
 - CPU-Auslastung des Hosts und jedes logischen CPU-Kerns
 - Arbeitsspeicher, GPU-Auslastung (NVIDIA), Dateisysteme, Laufwerke und Proxmox-Storage-Pools
-- Alle CTs und VMs mit Status, CPU, RAM, Disk und konfigurierten Kernen
+- Alle CTs und VMs mit Status, CPU-Auslastung, RAM, Disk und zugewiesenen vCPUs
+- CPU-Modell und Host-Kern-Zuweisung: bei VMs die konfigurierte Affinität, bei laufenden CTs die aktuell von Proxmox zugeteilten Host-Kerne
 - Starten und Stoppen von CTs und VMs
 - Installierte Debian-Pakete auf dem Proxmox-Host
 - Datei-Explorer für laufende CTs und VMs mit Download und Drag-and-drop-Upload
@@ -21,7 +22,7 @@ Ein Web-Dashboard für deinen Proxmox-VE-Host. Es zeigt die Auslastung des Hosts
 - Für VM-Dateien: Linux-VM mit installiertem und aktiviertem QEMU Guest Agent sowie Python 3.
 - Für CT-Dateien: laufender Linux-Container mit Python 3.
 
-Der Datei-Explorer zeigt das Dateisystem **des ausgewählten Gasts**, nicht das des Proxmox-Hosts. Die obersten Ordner unter `/` sehen bei Linux-Systemen oft ähnlich aus. Ordner anklicken, um deren Inhalt zu sehen. Dateien werden beim Upload nicht überschrieben. VM-Dateien sind standardmäßig auf 8 MiB begrenzt, CT-Dateien auf maximal 512 MiB.
+Die CPU-Auslastung stammt aus Proxmox. Bei VMs zeigt das Dashboard deren CPU-Modell und – sofern gesetzt – CPU-Affinität; ohne Affinität kann die VM auf allen Host-Kernen laufen. Bei laufenden CTs zeigt es die momentane, von Proxmox dynamisch verteilte Host-Kern-Zuweisung. Diese CT-Zuweisung kann sich zur Laufzeit ändern.\n\nDer Datei-Explorer zeigt das Dateisystem **des ausgewählten Gasts**, nicht das des Proxmox-Hosts. Die obersten Ordner unter `/` sehen bei Linux-Systemen oft ähnlich aus. Ordner anklicken, um deren Inhalt zu sehen. Dateien werden beim Upload nicht überschrieben. VM-Dateien sind standardmäßig auf 8 MiB begrenzt, CT-Dateien auf maximal 512 MiB.
 
 ## 1. Proxmox-API-Zugriff einrichten
 

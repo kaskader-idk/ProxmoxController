@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>ProxmoxController</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261016-3">
+  <link rel="stylesheet" href="/static/style.css?v=20261016-4">
 </head>
 <body>
   <aside class="sidebar">
@@ -29,9 +29,9 @@
       <div class="content-grid"><article class="card"><div class="card-heading"><div><h3>Systemressourcen</h3><p>Host-Auslastung und Kapazität</p></div><span class="chip">HOST</span></div><div class="resource-list" id="resource-list"></div></article>
       <article class="card"><div class="card-heading"><div><h3>Datenspeicher</h3><p>Proxmox Storage-Pools</p></div><button class="text-button" data-goto="storage">Alle ansehen ↗</button></div><div id="storage-preview" class="storage-preview"></div></article></div>
       <article class="card core-card"><div class="card-heading"><div><h3>CPU-Kerne</h3><p>Auslastung jedes logischen Kerns</p></div><span class="chip">LIVE</span></div><div id="core-grid" class="core-grid"></div></article>
-      <article class="card guest-card"><div class="card-heading"><div><h3>Container &amp; virtuelle Maschinen</h3><p>Name anklicken, um den Dateibrowser zu öffnen</p></div><button class="text-button" data-goto="guests">Alle ansehen ↗</button></div><div class="table-wrap"><table><thead><tr><th>NAME</th><th>TYP</th><th>STATUS</th><th>CPU</th><th>RAM</th><th>DISK</th><th></th></tr></thead><tbody id="guest-preview"></tbody></table></div></article>
+      <article class="card guest-card"><div class="card-heading"><div><h3>Container &amp; virtuelle Maschinen</h3><p>Name anklicken, um den Dateibrowser zu öffnen</p></div><button class="text-button" data-goto="guests">Alle ansehen ↗</button></div><div class="table-wrap"><table><thead><tr><th>NAME</th><th>TYP</th><th>STATUS</th><th>CPU / ZUWEISUNG</th><th>RAM</th><th>DISK</th><th></th></tr></thead><tbody id="guest-preview"></tbody></table></div></article>
     </section>
-    <section class="view" id="view-guests"><div class="section-heading"><div><h2>Alle Workloads</h2><p>Proxmox Container und virtuelle Maschinen</p></div><input id="guest-search" class="search" placeholder="Name oder VMID suchen…"></div><article class="card"><div class="table-wrap"><table><thead><tr><th>NAME</th><th>VMID</th><th>TYP</th><th>STATUS</th><th>CPU / KERNE</th><th>RAM</th><th>DISK</th><th>AKTION</th></tr></thead><tbody id="guest-table"></tbody></table></div></article></section>
+    <section class="view" id="view-guests"><div class="section-heading"><div><h2>Alle Workloads</h2><p>Proxmox Container und virtuelle Maschinen</p></div><input id="guest-search" class="search" placeholder="Name oder VMID suchen…"></div><article class="card"><div class="table-wrap"><table><thead><tr><th>NAME</th><th>VMID</th><th>TYP</th><th>STATUS</th><th>CPU / KERNE &amp; ZUWEISUNG</th><th>RAM</th><th>DISK</th><th>AKTION</th></tr></thead><tbody id="guest-table"></tbody></table></div></article></section>
     <section class="view" id="view-storage"><div class="section-heading"><div><h2>Speicher &amp; Laufwerke</h2><p>Host-Dateisysteme, Blockgeräte und Proxmox-Pools</p></div></div><div class="subheading">EINGEHÄNGTE DATEISYSTEME</div><div id="filesystem-list" class="storage-grid"></div><div class="subheading">BLOCKGERÄTE</div><div class="card table-card"><div class="table-wrap"><table><thead><tr><th>GERÄT</th><th>MODELL</th><th>TYP</th><th>DATEISYSTEM</th><th>GRÖSSE</th><th>EINGEHÄNGT</th></tr></thead><tbody id="block-table"></tbody></table></div></div><div class="subheading">PROXMOX STORAGE</div><div class="card table-card"><div class="table-wrap"><table><thead><tr><th>STORAGE</th><th>TYP</th><th>STATUS</th><th>BELEGT</th><th>FREI</th></tr></thead><tbody id="storage-table"></tbody></table></div></div></section>
     <section class="view" id="view-packages"><div class="section-heading"><div><h2>Installierte Pakete</h2><p>Debian-Pakete auf dem Proxmox-Host</p></div><input id="package-search" class="search" placeholder="Paket suchen…"></div><div class="package-summary" id="package-summary"></div><article class="card table-card"><div class="table-wrap package-wrap"><table><thead><tr><th>PAKET</th><th>VERSION</th><th>STATUS</th></tr></thead><tbody id="package-table"></tbody></table></div></article></section>
     <footer>ProxmoxController <span>·</span> Aktualisierung jede Sekunde</footer>
@@ -44,5 +44,5 @@
       <p class="explorer-hint">Uploads überschreiben keine vorhandenen Dateien. VM-Dateien: bis 8 MiB. CT-Dateien: bis 512 MiB.</p>
     </section>
   </div>
-  <script src="/static/app.js?v=20261016-3" defer></script>
+  <script src="/static/app.js?v=20261016-4" defer></script>
 </body></html>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Anmelden · ProxmoxController</title>
+  <link rel="stylesheet" href="/static/style.css?v=20261016-3">
+</head>
+<body class="login-page">
+  <main class="login-card card">
+    <div class="login-brand"><span class="brand-icon">P</span><span>Proxmox<span class="muted">Controller</span></span></div>
+    <div class="eyebrow">PROXMOX VE · DASHBOARD</div>
+    <h1>Anmelden</h1>
+    <p class="login-description">Melde dich mit deinen Dashboard-Zugangsdaten an.</p>
+    <!--LOGIN_ERROR-->
+    <form class="login-form" action="/login" method="post">
+      <label for="username">Benutzername</label>
+      <input id="username" name="username" autocomplete="username" required autofocus>
+      <label for="password">Passwort</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button class="login-submit" type="submit">Zum Dashboard</button>
+    </form>
+    <div class="login-footer">Dein Zugang wird nur für dieses Dashboard verwendet.</div>
+  </main>
+</body>
+</html>

@@ -226,7 +226,7 @@ def overview(_: str = Depends(require_login)) -> dict[str, Any]:
             try:
                 disks.append({"device": part.device, "mountpoint": part.mountpoint, "fstype": part.fstype,
                               **psutil.disk_usage(part.mountpoint)._asdict()})
-            except (OSError, PermissionError):
+            except (OSError, psutil.Error):
                 continue
         host = cached("host-slow", 5, lambda: {
             "memory": psutil.virtual_memory()._asdict(),

@@ -12,7 +12,7 @@ Ein selbst gehostetes Dashboard für einen Proxmox-VE-Host. Host- und Workload-D
 - Installierte Debian-Pakete mit Suche
 - HTTP-Basic-Anmeldung für Dashboard und API
 
-Der Dateibrowser funktioniert bei laufenden Gästen. Bei VMs muss der QEMU Guest Agent installiert und in der VM-Konfiguration aktiviert sein. Bei LXC wird `pct exec` über eine sudoers-Regel mit festem Hilfsskript ausgeführt; im CT wird Python 3 benötigt. Vorhandene Dateien werden nicht überschrieben. VM-Dateien sind standardmäßig auf 8 MiB, CT-Dateien auf 512 MiB begrenzt. Die Limits lassen sich über Umgebungsvariablen ändern. Geräte-Passthrough-GPUs in einer VM können nicht als aktuelle VM-GPU-Auslastung gemessen werden; angezeigt wird die NVIDIA-GPU des Hosts.
+Der Dateibrowser funktioniert bei laufenden Gästen. Bei VMs muss der QEMU Guest Agent installiert und in der VM-Konfiguration aktiviert sein. Bei LXC wird `pct exec` über eine sudoers-Regel mit festem Hilfsskript ausgeführt; im CT wird Python 3 benötigt. Vorhandene Dateien werden nicht überschrieben. VM-Dateien sind standardmäßig auf 8 MiB begrenzt. CT-Dateien sind aus Sicherheitsgründen auf höchstens 512 MiB begrenzt. Die Werte können über Umgebungsvariablen reduziert werden. Geräte-Passthrough-GPUs in einer VM können nicht als aktuelle VM-GPU-Auslastung gemessen werden; angezeigt wird die NVIDIA-GPU des Hosts.
 
 ## Voraussetzungen
 

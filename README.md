@@ -84,6 +84,7 @@ test -d /opt/ProxmoxController/.git && echo "Git-Checkout vorhanden" || echo "Ke
 Bei `Kein Git-Checkout` die alte Mappe zur Sicherheit umbenennen und danach klonen:
 
 ```bash
+systemctl stop proxmox-controller 2>/dev/null || true
 mv /opt/ProxmoxController "/opt/ProxmoxController-backup-$(date +%s)"
 git clone https://github.com/kaskader-idk/ProxmoxController.git
 ```

@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
-let state = null, packages = [], loading = false, activeGuest = null, currentPath = '/';
+let state = null, packages = [], loading = false, activeGuest = null, currentPath = '/', packageSuggestionCache = new Map(), lastPackageSearch = '', packageSearchToken = 0;
 const titles = {overview:'Systemübersicht',guests:'CTs & VMs',storage:'Speicher & Laufwerke',packages:'Installationen'};
 function esc(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function bytes(n){n=Number(n)||0;if(n<1)return '—';const u=['B','KB','MB','GB','TB','PB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return `${n.toFixed(i?1:0)} ${u[i]}`;}\nfunction bytesRate(n){return bytes(n)+'/s';}
@@ -37,7 +37,29 @@ function renderGuests(){if(!state)return;const q=($('#guest-search')?.value||'')
 function renderStorage(){if(!state)return;const h=state.host||{},fs=h.disks||[];$('#filesystem-list').innerHTML=fs.map(d=>`<article class="card fs-card"><div class="fs-head"><b>${esc(d.mountpoint)}</b><span>${esc(d.fstype)}</span></div><div class="fs-path">${esc(d.device)}</div>${meter(d.percent)}<div class="fs-info"><span>${bytes(d.used)} belegt</span><span>${bytes(d.free)} frei</span><b>${Math.round(d.percent)}%</b></div></article>`).join('')||'<div class="empty">Keine Dateisysteme erkannt</div>';
  const flat=[];const visit=items=>(items||[]).forEach(d=>{flat.push(d);visit(d.children)});visit(h.block_devices);$('#block-table').innerHTML=flat.map(d=>`<tr><td class="name-cell">${esc(d.name)}</td><td>${esc(d.model||'—')}</td><td>${esc(d.type||'—')}</td><td>${esc(d.fstype||'—')}</td><td>${bytes(d.size)}</td><td>${esc((d.mountpoints||[]).filter(Boolean).join(', ')||'—')}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">lsblk nicht verfügbar</td></tr>';
  $('#storage-table').innerHTML=(state.storages||[]).map(s=>{const total=Number(s.total)||0,used=Number(s.used)||0;return `<tr><td class="name-cell">${esc(s.storage)}</td><td>${esc(s.type||'—')}</td><td>${s.active===0?'Inaktiv':'Aktiv'}</td><td>${bytes(used)}</td><td>${bytes(Math.max(0,total-used))}</td></tr>`}).join('')||'<tr><td colspan="5" class="empty">Keine Proxmox-Pools</td></tr>';}
-function renderPackages(){if(!state)return;const raw=state.host?.packages||'';packages=raw.split('\n').filter(Boolean).map(line=>{const [name,version,status]=line.split('\t');return{name,version,status};}).filter(p=>p.status?.includes('installed'));const q=($('#package-search')?.value||'').toLowerCase(),rows=packages.filter(p=>`${p.name} ${p.version}`.toLowerCase().includes(q));$('#package-summary').textContent=`${packages.length.toLocaleString('de-AT')} installierte Debian-Pakete`;$('#package-table').innerHTML=rows.slice(0,1500).map(p=>`<tr><td class="name-cell">${esc(p.name)}</td><td>${esc(p.version)}</td><td><span class="status">Installiert</span></td></tr>`).join('')||'<tr><td colspan="3" class="empty">Keine Pakete gefunden</td></tr>';}
+function renderPackageSuggestions(items){$('#package-suggestions').innerHTML=items.map(p=>`<tr><td class="name-cell">${esc(p.name)}</td><td>${esc(p.description)}</td><td><span class="status">APT-Kandidat</span></td></tr>`).join('')||'<tr><td colspan="3" class="empty">Keine passenden Paketvorschläge im lokalen APT-Index</td></tr>';}
+async function renderPackages(){
+ if(!state)return;
+ const raw=state.host?.packages||'';
+ packages=raw.split('\n').filter(Boolean).map(line=>{const [name,version,status]=line.split('\t');return{name,version,status};}).filter(p=>p.status?.includes('installed'));
+ const q=($('#package-search')?.value||'').trim().toLowerCase(),rows=packages.filter(p=>`${p.name} ${p.version}`.toLowerCase().includes(q));
+ $('#package-summary').textContent=`${packages.length.toLocaleString('de-AT')} installierte Debian-Pakete`;
+ $('#package-table').innerHTML=rows.slice(0,1500).map(p=>`<tr><td class="name-cell">${esc(p.name)}</td><td>${esc(p.version)}</td><td><span class="status">Installiert</span></td></tr>`).join('')||'<tr><td colspan="3" class="empty">Keine installierten Treffer</td></tr>';
+ if(!q){$('#package-search-status').textContent='';$('#package-suggestions').innerHTML='<tr><td colspan="3" class="empty">Suchbegriff eingeben, um Vorschläge zu sehen.</td></tr>';lastPackageSearch='';return;}
+ const exact=packages.find(p=>p.name.toLowerCase()===q);
+ if(exact){$('#package-search-status').textContent='Installiert: '+exact.name;$('#package-suggestions').innerHTML='<tr><td colspan="3" class="empty">Das gesuchte Paket ist bereits installiert.</td></tr>';lastPackageSearch=q;return;}
+ $('#package-search-status').textContent='Nicht installiert: kein exakt gleichnamiges installiertes Paket.';
+ if(packageSuggestionCache.has(q)){renderPackageSuggestions(packageSuggestionCache.get(q));return;}
+ if(lastPackageSearch===q)return;
+ lastPackageSearch=q;const token=++packageSearchToken;
+ $('#package-suggestions').innerHTML='<tr><td colspan="3" class="empty">Suche im APT-Paketindex …</td></tr>';
+ try{
+  const response=await fetch('/api/packages/search?q='+encodeURIComponent(q),{cache:'no-store'});
+  const data=await response.json();if(!response.ok)throw new Error(data.detail||response.statusText);
+  if(token!==packageSearchToken||($('#package-search')?.value||'').trim().toLowerCase()!==q)return;
+  packageSuggestionCache.set(q,data.suggestions||[]);renderPackageSuggestions(data.suggestions||[]);
+ }catch(e){if(token===packageSearchToken){$('#package-suggestions').innerHTML='<tr><td colspan="3" class="empty">APT-Suche fehlgeschlagen: '+esc(e.message)+'</td></tr>';}}
+}
 async function load(){if(loading)return;loading=true;try{const r=await fetch('/api/overview',{cache:'no-store'});if(r.status===401){window.location.assign('/login');return;}if(!r.ok)throw new Error((await r.json().catch(()=>({detail:r.statusText}))).detail||r.statusText);state=await r.json();render();}catch(e){$('#connection').textContent='Verbindung fehlgeschlagen';$('#error').textContent=`Fehler beim Laden: ${e.message}`;$('#error').classList.remove('hidden');}finally{loading=false;}}
 $$('.nav').forEach(b=>b.addEventListener('click',()=>{$$('.nav').forEach(x=>x.classList.toggle('active',x===b));$$('.view').forEach(v=>v.classList.toggle('active',v.id===`view-${b.dataset.view}`));$('#page-title').textContent=titles[b.dataset.view];}));
 $$('[data-goto]').forEach(b=>b.addEventListener('click',()=>{const nav=$(`.nav[data-view="${b.dataset.goto}"]`);nav?.click();}));$('#refresh').addEventListener('click',load);$('#guest-search').addEventListener('input',renderGuests);$('#package-search').addEventListener('input',renderPackages);

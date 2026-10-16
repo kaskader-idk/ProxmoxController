@@ -4,13 +4,18 @@ Ein Web-Dashboard für deinen Proxmox-VE-Host. Es zeigt die Auslastung des Hosts
 
 ## Das zeigt das Dashboard
 
-- CPU-Auslastung des Hosts und jedes logischen CPU-Kerns
+- Schnelle Systemübersicht mit CPU-Auslastung des Hosts und jedes logischen CPU-Kerns
+- CPU-Frequenz und CPU-Temperatur, sofern Proxmox die Sensorwerte bereitstellt
+- RAM und Swap, Datenträger-Lese-/Schreibrate und Netzwerkgeschwindigkeit je Schnittstelle
 - Arbeitsspeicher, GPU-Auslastung (NVIDIA), Dateisysteme, Laufwerke und Proxmox-Storage-Pools
 - Alle CTs und VMs mit Status, CPU-Auslastung, RAM, Disk und zugewiesenen vCPUs
+- Übersicht über konfigurierte Gast-Ressourcen und noch verfügbare Host-Kapazität
 - CPU-Modell und Host-Kern-Zuweisung: bei VMs die konfigurierte Affinität, bei laufenden CTs die aktuell von Proxmox zugeteilten Host-Kerne
 - Starten und Stoppen von CTs und VMs
 - Installierte Debian-Pakete auf dem Proxmox-Host
-- Datei-Explorer für laufende CTs und VMs mit Download und Drag-and-drop-Upload
+- Eigene Detailseite für jeden CT/jede VM mit Gast-Auslastung, Datei-Explorer, Download, Drag-and-drop-Upload und Shell-Befehlen
+- Optionaler KI-Assistent mit OpenAI-kompatibler API. Jeder KI-Befehl muss vor Ausführung einzeln bestätigt werden.
+- Paket-Suche: installierte Pakete durchsuchen und bei nicht installierten Paketen APT-Vorschläge anzeigen
 - Aktualisierung der Live-Daten ungefähr einmal pro Sekunde
 - Normale Login-Seite statt Browser-Anmelde-Popup; Sitzung läuft nach 12 Stunden ab
 
@@ -22,7 +27,9 @@ Ein Web-Dashboard für deinen Proxmox-VE-Host. Es zeigt die Auslastung des Hosts
 - Für VM-Dateien: Linux-VM mit installiertem und aktiviertem QEMU Guest Agent sowie Python 3.
 - Für CT-Dateien: laufender Linux-Container mit Python 3.
 
-Die CPU-Auslastung stammt aus Proxmox. Bei VMs zeigt das Dashboard deren CPU-Modell und – sofern gesetzt – CPU-Affinität; ohne Affinität kann die VM auf allen Host-Kernen laufen. Bei laufenden CTs zeigt es die momentane, von Proxmox dynamisch verteilte Host-Kern-Zuweisung. Diese CT-Zuweisung kann sich zur Laufzeit ändern.\n\nDer Datei-Explorer zeigt das Dateisystem **des ausgewählten Gasts**, nicht das des Proxmox-Hosts. Die obersten Ordner unter `/` sehen bei Linux-Systemen oft ähnlich aus. Ordner anklicken, um deren Inhalt zu sehen. Dateien werden beim Upload nicht überschrieben. VM-Dateien sind standardmäßig auf 8 MiB begrenzt, CT-Dateien auf maximal 512 MiB.
+Die CPU-Auslastung stammt aus Proxmox. Bei VMs zeigt das Dashboard deren CPU-Modell und – sofern gesetzt – CPU-Affinität; ohne Affinität kann die VM auf allen Host-Kernen laufen. Bei laufenden CTs zeigt es die momentane, von Proxmox dynamisch verteilte Host-Kern-Zuweisung. Diese CT-Zuweisung kann sich zur Laufzeit ändern.\n\nDer Datei-Explorer zeigt das Dateisystem **des ausgewählten Gasts**, nicht das des Proxmox-Hosts. Die Gast-Shell führt einzelne Linux-Befehle im ausgewählten Gast aus; sie ist keine dauerhafte interaktive TTY-Sitzung. Für VMs muss der QEMU Guest Agent laufen. CT-Befehle werden über die bereits eingeschränkte sudoers-Regel und das root-eigene Hilfsskript ausgeführt.
+
+Die optionale KI-Verbindung verwendet eine OpenAI-kompatible Chat-Completions-API. Trage Basis-URL, Modell und optionalen API-Key auf der Gast-Detailseite ein. Der API-Key wird auf dem Proxmox-Host in `/var/lib/proxmox-controller/ai-settings.json` mit Dateirechten 600 gespeichert. Die KI erhält den Chatverlauf und die Ausgaben der Befehle, die du bestätigst. Sie kann keine Shell-Befehle ohne deine Freigabe starten. Die obersten Ordner unter `/` sehen bei Linux-Systemen oft ähnlich aus. Ordner anklicken, um deren Inhalt zu sehen. Dateien werden beim Upload nicht überschrieben. VM-Dateien sind standardmäßig auf 8 MiB begrenzt, CT-Dateien auf maximal 512 MiB.
 
 ## 1. Proxmox-API-Zugriff einrichten
 

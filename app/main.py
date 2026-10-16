@@ -119,6 +119,18 @@ def command(args: list[str], timeout: int = 12) -> str:
         return ""
 
 
+def lxc_cpu_sets() -> dict[str, str]:
+    raw = command([
+        "sudo", "-n", "/usr/bin/python3", "/opt/ProxmoxController/scripts/pct_files.py", "cpusets",
+    ], timeout=4)
+    result: dict[str, str] = {}
+    for line in raw.splitlines():
+        vmid, separator, cpus = line.partition(":")
+        if separator and vmid.strip().isdigit():
+            result[vmid.strip()] = cpus.strip()
+    return result
+
+
 def host_disks() -> list[dict[str, Any]]:
     raw = command(["lsblk", "-J", "-b", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,MOUNTPOINTS,MODEL"])
     if not raw:
@@ -286,10 +298,17 @@ def overview(_: str = Depends(require_login)) -> dict[str, Any]:
                 lambda g=guest, k=kind: pve(f"/nodes/{g.get('node', PVE_NODE)}/{k}/{g['vmid']}/config"),
             )
             row["cores"] = int(config.get("cores", 1)) * int(config.get("sockets", 1))
+            row["cpu_model"] = config.get("cpu") if kind == "qemu" else "Host-CPU (LXC)"
+            row["cpu_affinity"] = config.get("affinity") if kind == "qemu" else None
+            row["cpu_limit"] = config.get("cpulimit", 0)
             row["memory_configured"] = int(config.get("memory", 0)) * 1024**2
             row["disk_configured"] = config.get("rootfs", config.get("scsi0", config.get("virtio0", "")))
             row["status"] = guest.get("status", "unknown")
             guest_rows.append(row)
+        lxc_sets = cached("lxc-cpu-sets", 1.0, lxc_cpu_sets)
+        for row in guest_rows:
+            if row.get("type") == "lxc":
+                row["cpu_affinity"] = lxc_sets.get(str(row.get("vmid")))
         core_percent = psutil.cpu_percent(interval=0.10, percpu=True)
         partitions = cached("partitions", 5, lambda: psutil.disk_partitions(all=False))
         disks = []

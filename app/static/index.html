@@ -13,7 +13,6 @@
     <button class="nav" data-view="guests"><span>▣</span> CTs &amp; VMs</button>
     <button class="nav" data-view="storage"><span>◩</span> Speicher</button>
     <button class="nav" data-view="packages"><span>▦</span> Installationen</button>
-    <button class="nav" data-view="files"><span>⇧</span> Dateiablage</button>
     <div class="sidebar-bottom"><i class="pulse"></i><span id="connection">Verbinde…</span><small>Proxmox VE · lokal</small></div>
   </aside>
   <main>
@@ -29,13 +28,21 @@
       </div>
       <div class="content-grid"><article class="card"><div class="card-heading"><div><h3>Systemressourcen</h3><p>Host-Auslastung und Kapazität</p></div><span class="chip">HOST</span></div><div class="resource-list" id="resource-list"></div></article>
       <article class="card"><div class="card-heading"><div><h3>Datenspeicher</h3><p>Proxmox Storage-Pools</p></div><button class="text-button" data-goto="storage">Alle ansehen ↗</button></div><div id="storage-preview" class="storage-preview"></div></article></div>
-      <article class="card guest-card"><div class="card-heading"><div><h3>Container &amp; virtuelle Maschinen</h3><p>Starten, stoppen und Ressourcen prüfen</p></div><button class="text-button" data-goto="guests">Alle ansehen ↗</button></div><div class="table-wrap"><table><thead><tr><th>NAME</th><th>TYP</th><th>STATUS</th><th>CPU</th><th>RAM</th><th>DISK</th><th></th></tr></thead><tbody id="guest-preview"></tbody></table></div></article>
+      <article class="card core-card"><div class="card-heading"><div><h3>CPU-Kerne</h3><p>Auslastung jedes logischen Kerns</p></div><span class="chip">LIVE</span></div><div id="core-grid" class="core-grid"></div></article>
+      <article class="card guest-card"><div class="card-heading"><div><h3>Container &amp; virtuelle Maschinen</h3><p>Name anklicken, um den Dateibrowser zu öffnen</p></div><button class="text-button" data-goto="guests">Alle ansehen ↗</button></div><div class="table-wrap"><table><thead><tr><th>NAME</th><th>TYP</th><th>STATUS</th><th>CPU</th><th>RAM</th><th>DISK</th><th></th></tr></thead><tbody id="guest-preview"></tbody></table></div></article>
     </section>
     <section class="view" id="view-guests"><div class="section-heading"><div><h2>Alle Workloads</h2><p>Proxmox Container und virtuelle Maschinen</p></div><input id="guest-search" class="search" placeholder="Name oder VMID suchen…"></div><article class="card"><div class="table-wrap"><table><thead><tr><th>NAME</th><th>VMID</th><th>TYP</th><th>STATUS</th><th>CPU / KERNE</th><th>RAM</th><th>DISK</th><th>AKTION</th></tr></thead><tbody id="guest-table"></tbody></table></div></article></section>
     <section class="view" id="view-storage"><div class="section-heading"><div><h2>Speicher &amp; Laufwerke</h2><p>Host-Dateisysteme, Blockgeräte und Proxmox-Pools</p></div></div><div class="subheading">EINGEHÄNGTE DATEISYSTEME</div><div id="filesystem-list" class="storage-grid"></div><div class="subheading">BLOCKGERÄTE</div><div class="card table-card"><div class="table-wrap"><table><thead><tr><th>GERÄT</th><th>MODELL</th><th>TYP</th><th>DATEISYSTEM</th><th>GRÖSSE</th><th>EINGEHÄNGT</th></tr></thead><tbody id="block-table"></tbody></table></div></div><div class="subheading">PROXMOX STORAGE</div><div class="card table-card"><div class="table-wrap"><table><thead><tr><th>STORAGE</th><th>TYP</th><th>STATUS</th><th>BELEGT</th><th>FREI</th></tr></thead><tbody id="storage-table"></tbody></table></div></div></section>
     <section class="view" id="view-packages"><div class="section-heading"><div><h2>Installierte Pakete</h2><p>Debian-Pakete auf dem Proxmox-Host</p></div><input id="package-search" class="search" placeholder="Paket suchen…"></div><div class="package-summary" id="package-summary"></div><article class="card table-card"><div class="table-wrap package-wrap"><table><thead><tr><th>PAKET</th><th>VERSION</th><th>STATUS</th></tr></thead><tbody id="package-table"></tbody></table></div></article></section>
-    <section class="view" id="view-files"><div class="section-heading"><div><h2>Dateiablage</h2><p>Dateien sicher auf dem Host ablegen und herunterladen</p></div></div><div class="card upload-card"><div id="dropzone" class="dropzone"><div class="upload-symbol">⇧</div><h3>Dateien hier ablegen</h3><p>oder auswählen – Dateien werden in einen separaten Ablageordner geladen</p><label class="button primary" for="file-input">Dateien auswählen</label><input id="file-input" type="file" multiple hidden></div><div class="upload-note">Upload-Limit pro Datei: <b id="upload-limit">2 GB</b><span id="upload-progress"></span></div></div><article class="card guest-card"><div class="card-heading"><div><h3>Abgelegte Dateien</h3><p>Im konfigurierten Upload-Verzeichnis</p></div></div><div class="file-list" id="file-list"></div></article></section>
-    <footer>ProxmoxController <span>·</span> Aktualisierung alle 5 Sekunden</footer>
+    <footer>ProxmoxController <span>·</span> Aktualisierung jede Sekunde</footer>
   </main>
+  <div id="file-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="file-title">
+    <section class="file-explorer card"><header class="explorer-header"><div><div class="eyebrow">DATEIBROWSER</div><h2 id="file-title">CT/VM</h2></div><button id="file-close" class="icon-button" aria-label="Schließen">×</button></header>
+      <div class="explorer-toolbar"><button id="file-up" class="button">↑ Übergeordnet</button><div id="file-path" class="file-path">/</div><label class="button primary" for="guest-file-input">Dateien hochladen</label><input id="guest-file-input" type="file" multiple hidden></div>
+      <div id="guest-dropzone" class="guest-dropzone"><p>Hier Dateien per Drag &amp; Drop ablegen</p><div id="file-progress"></div></div>
+      <div class="file-table-wrap"><table class="file-table"><thead><tr><th>NAME</th><th>TYP</th><th>GRÖSSE</th><th>GEÄNDERT</th><th></th></tr></thead><tbody id="guest-file-table"><tr><td colspan="5" class="empty">Lade Verzeichnis…</td></tr></tbody></table></div>
+      <p class="explorer-hint">Uploads überschreiben keine vorhandenen Dateien. VM-Dateien: bis 8 MiB. CT-Dateien: bis 512 MiB.</p>
+    </section>
+  </div>
   <script src="/static/app.js" defer></script>
 </body></html>

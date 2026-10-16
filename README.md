@@ -11,6 +11,7 @@ Ein Web-Dashboard für deinen Proxmox-VE-Host. Es zeigt die Auslastung des Hosts
 - Installierte Debian-Pakete auf dem Proxmox-Host
 - Datei-Explorer für laufende CTs und VMs mit Download und Drag-and-drop-Upload
 - Aktualisierung der Live-Daten ungefähr einmal pro Sekunde
+- Normale Login-Seite statt Browser-Anmelde-Popup; Sitzung läuft nach 12 Stunden ab
 
 ## Voraussetzungen
 
@@ -128,7 +129,8 @@ APP_PASSWORD=HIER_EIN_LANGES_EIGENES_PASSWORT
 
 - `PVE_NODE`: den Namen des Proxmox-Knotens verwenden. Anzeigen mit `hostname` oder in **Datacenter → Nodes**.
 - `PVE_API_TOKEN`: den vollständigen Token-Wert einsetzen, inklusive `=SECRET`.
-- `APP_USER` und `APP_PASSWORD`: Damit meldest du dich am Dashboard an. Passwort selbst wählen.
+- `APP_USER` und `APP_PASSWORD`: Benutzername und Passwort für die Login-Seite des Dashboards selbst wählen.
+- `APP_SESSION_SECRET`: Optionaler geheimer Schlüssel zum Signieren der Login-Sitzung. Erzeugen mit `openssl rand -hex 32`. Wenn leer, wird `APP_PASSWORD` verwendet.
 - `PVE_CA_CERT`: Zertifikat für die sichere Verbindung zur lokalen Proxmox-API. Standardmäßig `/etc/pve/pve-root-ca.pem`.
 
 Anschließend die Konfigurationsdatei schützen:
@@ -249,7 +251,7 @@ journalctl -u proxmox-controller -f
 
 ## Netzwerk und Sicherheit
 
-Der Dienst lauscht standardmäßig auf `0.0.0.0:8787` und verlangt Dashboard-Anmeldedaten. HTTP-Basic verschlüsselt das Passwort nicht selbst. Verwende den Port nur im vertrauenswürdigen LAN oder über Tailscale. Für Zugriff aus dem Internet einen TLS-Reverse-Proxy verwenden und Port 8787 nicht direkt öffentlich freigeben. Proxmox-Token, Dashboard-Passwort und `/etc/default/proxmox-controller` geheim halten.
+Der Dienst lauscht standardmäßig auf `0.0.0.0:8787` und zeigt vor dem Dashboard eine Login-Seite. Nach erfolgreichem Login wird eine signierte, HTTP-only Sitzung im Browser-Cookie gespeichert; sie läuft nach 12 Stunden ab. Über **Abmelden** wird das Cookie gelöscht. Verwende den Port nur im vertrauenswürdigen LAN oder über Tailscale. Für Zugriff aus dem Internet einen TLS-Reverse-Proxy verwenden und Port 8787 nicht direkt öffentlich freigeben. Proxmox-Token, Dashboard-Passwort, Sitzungsschlüssel und `/etc/default/proxmox-controller` geheim halten.
 
 ## Einstellbare Werte
 
@@ -262,6 +264,7 @@ Der Dienst lauscht standardmäßig auf `0.0.0.0:8787` und verlangt Dashboard-Anm
 | `PVE_TLS_VERIFY` | `true` | TLS-Zertifikat überprüfen |
 | `APP_USER` | `admin` | Dashboard-Benutzername |
 | `APP_PASSWORD` | – | Dashboard-Passwort |
+| `APP_SESSION_SECRET` | APP_PASSWORD | Optionaler Schlüssel zum Signieren von Sitzungen |
 | `MAX_VM_FILE_BYTES` | `8388608` | Maximale VM-Dateigröße in Bytes |
 | `MAX_CT_FILE_BYTES` | `536870912` | Maximale CT-Dateigröße, höchstens 512 MiB |
 | `HOST` / `PORT` | `0.0.0.0` / `8787` | Adresse und Port des Webservers |

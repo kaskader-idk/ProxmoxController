@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 import httpx
 import psutil
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -238,11 +238,20 @@ def login_form(request: Request) -> Response:
 
 
 @app.post("/login")
-def login(request: Request, username: str = Form(...), password: str = Form(...)) -> Response:
+async def login(request: Request) -> Response:
+    try:
+        form = await request.form()
+    except Exception:
+        return HTMLResponse(login_page("Das Formular konnte nicht gelesen werden. Bitte Seite neu laden."))
+
+    username = str(form.get("username", ""))
+    password = str(form.get("password", ""))
     user_ok = hmac.compare_digest(username.encode(), APP_USER.encode())
     password_ok = hmac.compare_digest(password.encode(), APP_PASSWORD.encode())
-    if not APP_USER or not APP_PASSWORD or not (user_ok and password_ok):
-        return HTMLResponse(login_page("Benutzername oder Passwort ist falsch."), status_code=401)
+    if not APP_USER or not APP_PASSWORD:
+        return HTMLResponse(login_page("APP_USER und APP_PASSWORD fehlen in /etc/default/proxmox-controller."))
+    if not (user_ok and password_ok):
+        return HTMLResponse(login_page("Benutzername oder Passwort ist falsch."))
     timestamp = str(int(time.time()))
     value = f"{timestamp}.{_session_signature(timestamp)}"
     response = RedirectResponse("/", status_code=303)

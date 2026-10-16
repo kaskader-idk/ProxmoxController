@@ -17,7 +17,7 @@ NoNewPrivileges=false
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/proxmox-controller
+ReadWritePaths=/var/lib/proxmox-controller /run/lxc/lock
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]

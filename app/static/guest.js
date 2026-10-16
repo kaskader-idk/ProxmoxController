@@ -67,6 +67,10 @@ function renderAI(){
  box.innerHTML=messages.filter(m=>m.role==='user'||m.role==='assistant').map(m=>'<div class="ai-message '+(m.role==='user'?'user':'assistant')+'"><b>'+(m.role==='user'?'Du':'KI')+'</b><pre>'+esc(typeof m.content==='string'?m.content:(m.content==null?'':JSON.stringify(m.content)))+'</pre></div>').join('');
  box.scrollTop=box.scrollHeight;
 }
+function syncAIControls(){
+ const disabled=!configuredAI||busy||pendingCalls.length>0;
+ $('#ai-send').disabled=disabled;$('#ai-prompt').disabled=disabled;
+}
 function systemPrompt(){
  return 'Du hilfst bei der Diagnose und Administration genau dieses Linux-Gasts: '+(guest?.name||'Gast')+', Typ '+kind+', ID '+vmid+'. Du darfst einen Shell-Befehl nur über das Tool run_guest_command vorschlagen. Jeder vorgeschlagene Befehl wird dem Benutzer zuerst angezeigt und nur nach seiner manuellen Freigabe ausgeführt. Erkläre kurz riskante oder destruktive Befehle und vermeide sie, sofern der Benutzer sie nicht ausdrücklich verlangt. Führe bevorzugt lesende Diagnosebefehle aus. Behaupte niemals, einen Befehl ausgeführt zu haben, bevor ein Tool-Ergebnis vorliegt.';
 }
@@ -80,7 +84,7 @@ async function requestAI(){
   renderAI();renderPending();
   if(!pendingCalls.length)$('#ai-state').textContent='Verbunden';
  }catch(e){messages.push({role:'assistant',content:'KI-Fehler: '+e.message});renderAI();$('#ai-state').textContent='Fehler';}
- finally{busy=false;$('#ai-send').disabled=!configuredAI;}
+ finally{busy=false;syncAIControls();}
 }
 function renderPending(){
  const panel=$('#ai-pending');
@@ -105,6 +109,7 @@ async function resolveTool(approve,command,item){
  }
  messages.push({role:'tool',tool_call_id:item.id,name:item.name,content:JSON.stringify(result)});
  pendingCalls.shift();renderAI();renderPending();busy=false;
+ syncAIControls();
  if(pendingCalls.length){$('#ai-state').textContent='Freigabe erforderlich';return;}
  await requestAI();
 }
@@ -119,7 +124,7 @@ async function loadAISettings(){
   const data=await api('/api/ai/settings');
   $('#ai-base-url').value=data.base_url||'';$('#ai-model').value=data.model||'';
   configuredAI=!!data.configured;$('#ai-state').textContent=configuredAI?'Verbunden':'Nicht verbunden';
-  $('#ai-send').disabled=!configuredAI;$('#ai-prompt').disabled=!configuredAI;
+  syncAIControls();
  }catch(e){$('#ai-state').textContent='Nicht verfügbar';}
 }
 $('#ai-settings-form').addEventListener('submit',async e=>{
@@ -130,7 +135,7 @@ $('#ai-settings-form').addEventListener('submit',async e=>{
    clear_api_key:$('#ai-clear-key').checked
   })});
   $('#ai-api-key').value='';$('#ai-clear-key').checked=false;configuredAI=true;
-  $('#ai-state').textContent='Verbindung gespeichert';$('#ai-send').disabled=false;$('#ai-prompt').disabled=false;
+  $('#ai-state').textContent='Verbindung gespeichert';syncAIControls();
   $('#ai-settings-form').closest('details').open=false;
  }catch(err){$('#ai-state').textContent=err.message;}
  finally{button.disabled=false;}

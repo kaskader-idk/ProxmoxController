@@ -430,6 +430,58 @@ def guest_action(kind: str, vmid: int, action: str, _: str = Depends(require_log
     return {"ok": True, "task": task}
 
 
+def run_ct_command(vmid: int, command_text: str) -> dict[str, Any]:
+    helper = Path("/opt/ProxmoxController/scripts/pct_files.py")
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "/usr/bin/python3", str(helper), "command", str(vmid), command_text],
+            capture_output=True, timeout=35, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(status_code=502, detail=f"CT-Shell nicht verfügbar: {exc}") from exc
+    if result.returncode:
+        raise HTTPException(status_code=502, detail=result.stderr.decode("utf-8", "replace").strip() or "CT-Befehl fehlgeschlagen")
+    try:
+        output = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=502, detail="Ungültige Antwort der CT-Shell") from exc
+    return {
+        "exit_code": int(output.get("exit_code", 1)),
+        "stdout": str(output.get("stdout", ""))[-24000:],
+        "stderr": str(output.get("stderr", ""))[-12000:],
+    }
+
+
+def run_vm_command(node: str, vmid: int, command_text: str) -> dict[str, Any]:
+    result = pve(f"/nodes/{node}/qemu/{vmid}/agent/exec", method="POST",
+                 form=[("command", "/bin/sh"), ("command", "-lc"), ("command", command_text), ("capture-output", "1")])
+    pid = result.get("pid")
+    if pid is None:
+        raise HTTPException(status_code=502, detail="QEMU Guest Agent lieferte keine Prozess-ID")
+    status = None
+    for _ in range(300):
+        status = pve(f"/nodes/{node}/qemu/{vmid}/agent/exec-status", params={"pid": pid})
+        if status.get("exited"):
+            break
+        time.sleep(0.1)
+    if not status or not status.get("exited"):
+        raise HTTPException(status_code=504, detail="VM-Befehl dauert länger als 30 Sekunden")
+    return {
+        "exit_code": int(status.get("exitcode", 0)),
+        "stdout": base64.b64decode(status.get("out-data", "")).decode("utf-8", "replace")[-24000:],
+        "stderr": base64.b64decode(status.get("err-data", "")).decode("utf-8", "replace")[-12000:],
+    }
+
+
+@app.post("/api/guest/{kind}/{vmid}/command")
+def guest_command(kind: str, vmid: int, body: GuestCommandRequest,
+                  _: str = Depends(require_login)) -> dict[str, Any]:
+    guest = guest_for(kind, vmid)
+    if kind == "lxc":
+        return run_ct_command(vmid, body.command)
+    return run_vm_command(str(guest.get("node") or PVE_NODE), vmid, body.command)
+
+
 @app.get("/api/guest/{kind}/{vmid}/files")
 def list_guest_files(kind: str, vmid: int, path: str = Query("/"), _: str = Depends(require_login)) -> dict[str, Any]:
     raw = guest_file_operation(kind, vmid, "list", path)
@@ -476,6 +528,106 @@ async def upload_guest_files(kind: str, vmid: int, path: str = Query("/"), files
             raise
         saved.append({"name": name, "size": size})
     return {"ok": True, "files": saved}
+
+
+def load_ai_settings() -> dict[str, str]:
+    try:
+        value = json.loads(AI_SETTINGS_PATH.read_text(encoding="utf-8"))
+        return {"base_url": str(value.get("base_url", "")), "model": str(value.get("model", "")),
+                "api_key": str(value.get("api_key", ""))}
+    except (OSError, ValueError, TypeError):
+        return {"base_url": "", "model": "", "api_key": ""}
+
+
+def save_ai_settings(settings: dict[str, str]) -> None:
+    AI_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = AI_SETTINGS_PATH.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(settings), encoding="utf-8")
+    os.chmod(temp_path, 0o600)
+    os.replace(temp_path, AI_SETTINGS_PATH)
+
+
+@app.get("/api/ai/settings")
+def get_ai_settings(_: str = Depends(require_login)) -> dict[str, Any]:
+    settings = load_ai_settings()
+    return {"base_url": settings["base_url"], "model": settings["model"],
+            "configured": bool(settings["base_url"] and settings["model"])}
+
+
+@app.post("/api/ai/settings")
+def update_ai_settings(body: AISettingsRequest, _: str = Depends(require_login)) -> dict[str, Any]:
+    base_url = body.base_url.strip().rstrip("/")
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+        raise HTTPException(status_code=400, detail="Bitte eine gültige HTTP(S)-API-Basisadresse angeben.")
+    current = load_ai_settings()
+    api_key = "" if body.clear_api_key else (body.api_key.strip() or current["api_key"])
+    save_ai_settings({"base_url": base_url, "model": body.model.strip(), "api_key": api_key})
+    return {"ok": True, "configured": True}
+
+
+@app.post("/api/ai/chat")
+def ai_chat(body: AIChatRequest, _: str = Depends(require_login)) -> dict[str, Any]:
+    settings = load_ai_settings()
+    if not settings["base_url"] or not settings["model"]:
+        raise HTTPException(status_code=409, detail="Bitte zuerst API-Basisadresse und Modell in den KI-Einstellungen eintragen.")
+    if len(json.dumps(body.messages, ensure_ascii=False)) > 100_000:
+        raise HTTPException(status_code=413, detail="Der KI-Kontext ist zu groß.")
+    for message in body.messages:
+        if message.get("role") not in {"system", "user", "assistant", "tool"}:
+            raise HTTPException(status_code=400, detail="Ungültige Chat-Nachricht.")
+    url = settings["base_url"] + "/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if settings["api_key"]:
+        headers["Authorization"] = f"Bearer {settings['api_key']}"
+    payload = {
+        "model": settings["model"],
+        "messages": body.messages,
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "run_guest_command",
+                "description": "Schlage einen Linux-Shell-Befehl für den aktuell ausgewählten Gast vor. Der Benutzer muss jeden Befehl einzeln freigeben.",
+                "parameters": {
+                    "type": "object", "properties": {"command": {"type": "string"}},
+                    "required": ["command"], "additionalProperties": False,
+                },
+            },
+        }],
+        "tool_choice": "auto",
+    }
+    try:
+        response = httpx.post(url, headers=headers, json=payload, timeout=120.0)
+        response.raise_for_status()
+        data = response.json()
+    except httpx.HTTPStatusError as exc:
+        detail = f"KI-API HTTP {exc.response.status_code}"
+        try:
+            detail += ": " + str(exc.response.json().get("error", {}).get("message", ""))[:500]
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"KI-API nicht erreichbar: {exc}") from exc
+    choices = data.get("choices") or []
+    if not choices:
+        raise HTTPException(status_code=502, detail="KI-API hat keine Antwort geliefert.")
+    return {"message": choices[0].get("message", {})}
+
+
+@app.get("/api/packages/search")
+def search_packages(q: str = Query(min_length=1, max_length=100),
+                    _: str = Depends(require_login)) -> dict[str, Any]:
+    query = q.strip()
+    if not query or any(ord(char) < 32 for char in query):
+        raise HTTPException(status_code=400, detail="Ungültiger Suchbegriff.")
+    raw = command(["apt-cache", "search", "--names-only", query], timeout=8)
+    suggestions = []
+    for line in raw.splitlines()[:30]:
+        name, separator, description = line.partition(" - ")
+        if separator and name:
+            suggestions.append({"name": name.strip(), "description": description.strip()})
+    return {"query": query, "suggestions": suggestions}
 
 
 if __name__ == "__main__":

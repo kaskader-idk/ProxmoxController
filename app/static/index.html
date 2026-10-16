@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>ProxmoxController</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261016-5">
+  <link rel="stylesheet" href="/static/style.css?v=20261016-6">
 </head>
 <body>
   <aside class="sidebar">
@@ -26,12 +26,14 @@
         <article class="metric card"><div class="metric-top"><span>GRAFIKKARTE</span><span class="metric-icon green">◈</span></div><div class="metric-value" id="gpu-value">—</div><div class="metric-meta" id="gpu-meta">Keine NVIDIA GPU erkannt</div><div class="meter"><i id="gpu-bar"></i></div></article>
         <article class="metric card"><div class="metric-top"><span>VIRTUELLE SYSTEME</span><span class="metric-icon orange">▣</span></div><div class="metric-value" id="guest-count">—</div><div class="metric-meta" id="guest-meta">CTs &amp; VMs</div><div class="mini-tags" id="guest-tags"></div></article>
       </div>
+      <article class="card system-info-card"><div class="card-heading"><div><h3>Systeminformationen</h3><p>Proxmox-Knoten und Host-Prozessor</p></div><span class="chip">HOST</span></div><div id="system-info" class="system-info-grid"></div></article>
       <div class="content-grid"><article class="card"><div class="card-heading"><div><h3>Systemressourcen</h3><p>Host-Auslastung und Kapazität</p></div><span class="chip">HOST</span></div><div class="resource-list" id="resource-list"></div></article>
       <article class="card"><div class="card-heading"><div><h3>Datenspeicher</h3><p>Proxmox Storage-Pools</p></div><button class="text-button" data-goto="storage">Alle ansehen ↗</button></div><div id="storage-preview" class="storage-preview"></div></article></div>
       <article class="card core-card"><div class="card-heading"><div><h3>CPU-Kerne</h3><p>Auslastung, Frequenz und Temperatur je Kern</p><small id="cpu-temp-summary" class="cpu-temp-summary">Temperatursensor wird geprüft</small></div><span class="chip">LIVE</span></div><div id="core-grid" class="core-grid"></div></article>
       <article class="card guest-card"><div class="card-heading"><div><h3>Container &amp; virtuelle Maschinen</h3><p>Name anklicken für Detailseite; „Dateien“ öffnet den Datei-Explorer</p></div><button class="text-button" data-goto="guests">Alle ansehen ↗</button></div><div class="table-wrap"><table><thead><tr><th>NAME</th><th>TYP</th><th>STATUS</th><th>CPU / ZUWEISUNG</th><th>RAM</th><th>DISK</th><th></th></tr></thead><tbody id="guest-preview"></tbody></table></div></article>
       <section class="detail-grid">
         <article class="card detail-card"><div class="card-heading"><div><h3>Arbeitsspeicher im Detail</h3><p>Belegt, verfügbar und Swap</p></div><span class="chip">RAM</span></div><div id="ram-detail" class="detail-list"></div></article>
+        <article class="card detail-card"><div class="card-heading"><div><h3>Dateisysteme</h3><p>Belegung je Mountpoint</p></div><span class="chip">DISK</span></div><div id="disk-space" class="disk-space-list"></div></article>
         <article class="card detail-card"><div class="card-heading"><div><h3>Datenträger-Aktivität</h3><p>Durchsatz des Hosts</p></div><span class="chip">I/O</span></div><div id="disk-io" class="detail-list"></div></article>
         <article class="card detail-card network-card"><div class="card-heading"><div><h3>Netzwerkgeschwindigkeit</h3><p>Empfangen und gesendet je Schnittstelle</p></div><span class="chip">LIVE</span></div><div class="table-wrap"><table><thead><tr><th>SCHNITTSTELLE</th><th>EMPFANGEN</th><th>GESENDET</th></tr></thead><tbody id="network-table"><tr><td colspan="3" class="empty">Lade Netzwerkdaten …</td></tr></tbody></table></div></article>
       </section>
@@ -51,5 +53,5 @@
       <p class="explorer-hint">Uploads überschreiben keine vorhandenen Dateien. VM-Dateien: bis 8 MiB. CT-Dateien: bis 512 MiB.</p>
     </section>
   </div>
-  <script src="/static/app.js?v=20261016-5" defer></script>
+  <script src="/static/app.js?v=20261016-6" defer></script>
 </body></html>

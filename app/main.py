@@ -69,7 +69,7 @@ def rate(value: float, key: str, now: float) -> float:
 def cpu_temperatures() -> list[dict[str, Any]]:
     try:
         sensors = psutil.sensors_temperatures()
-    except (AttributeError, OSError):
+    except (AttributeError, NotImplementedError, OSError):
         sensors = {}
     readings = []
     for sensor_name, entries in sensors.items():
@@ -485,6 +485,8 @@ def run_vm_command(node: str, vmid: int, command_text: str) -> dict[str, Any]:
 @app.post("/api/guest/{kind}/{vmid}/command")
 def guest_command(kind: str, vmid: int, body: GuestCommandRequest,
                   _: str = Depends(require_login)) -> dict[str, Any]:
+    if not body.command.strip() or "\x00" in body.command:
+        raise HTTPException(status_code=400, detail="Der Befehl ist leer oder ungültig.")
     guest = guest_for(kind, vmid)
     if kind == "lxc":
         return run_ct_command(vmid, body.command)
@@ -542,6 +544,8 @@ async def upload_guest_files(kind: str, vmid: int, path: str = Query("/"), files
 def load_ai_settings() -> dict[str, str]:
     try:
         value = json.loads(AI_SETTINGS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            return {"base_url": "", "model": "", "api_key": ""}
         return {"base_url": str(value.get("base_url", "")), "model": str(value.get("model", "")),
                 "api_key": str(value.get("api_key", ""))}
     except (OSError, ValueError, TypeError):

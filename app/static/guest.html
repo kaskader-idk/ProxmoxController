@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Gast · ProxmoxController</title>
+  <link rel="stylesheet" href="/static/style.css?v=20261016-5">
+</head>
+<body class="guest-detail-page">
+  <main class="guest-main">
+    <header class="guest-page-header">
+      <div>
+        <a class="back-link" href="/">← Zur Systemübersicht</a>
+        <div class="eyebrow">PROXMOX GAST</div>
+        <h1 id="guest-title">CT / VM</h1>
+        <p id="guest-subtitle">Lade Gastdaten …</p>
+      </div>
+      <div class="header-right"><span id="guest-live" class="live">Verbinde …</span>
+        <button id="guest-refresh" class="icon-button" title="Aktualisieren">↻</button>
+        <form action="/logout" method="post"><button class="logout-button" type="submit">Abmelden</button></form>
+      </div>
+    </header>
+    <div id="guest-error" class="error hidden"></div>
+    <section id="guest-metrics" class="guest-metric-grid">
+      <article class="metric card"><div class="metric-top">STATUS</div><div id="guest-status" class="metric-value">—</div></article>
+      <article class="metric card"><div class="metric-top">CPU-AUSLASTUNG</div><div id="guest-cpu-value" class="metric-value">—</div><div id="guest-cpu-meta" class="metric-meta">—</div></article>
+      <article class="metric card"><div class="metric-top">ARBEITSSPEICHER</div><div id="guest-ram-value" class="metric-value">—</div><div id="guest-ram-meta" class="metric-meta">—</div></article>
+      <article class="metric card"><div class="metric-top">DATENTRÄGER</div><div id="guest-disk-value" class="metric-value">—</div><div id="guest-disk-meta" class="metric-meta">—</div></article>
+    </section>
+    <section class="guest-workspace">
+      <article class="card terminal-card">
+        <div class="card-heading"><div><h2>Command-Shell</h2><p>Befehle laufen als root im ausgewählten Gast.</p></div><span class="chip">GAST</span></div>
+        <div id="terminal-output" class="terminal-output"><div class="terminal-system">Shell bereit. Linux-Befehl eingeben und mit Enter ausführen.</div></div>
+        <form id="terminal-form" class="terminal-form">
+          <span class="terminal-prompt">root@<b id="terminal-host">guest</b>:$</span>
+          <input id="terminal-command" autocomplete="off" spellcheck="false" placeholder="z. B. df -h" aria-label="Shell-Befehl">
+          <button class="button primary" type="submit">Ausführen</button>
+        </form>
+        <p class="terminal-note">CTs nutzen pct exec. VMs benötigen einen aktivierten QEMU Guest Agent und ein Linux-Gastsystem.</p>
+      </article>
+      <article class="card ai-card">
+        <div class="card-heading"><div><h2>KI-Assistent</h2><p>Die KI darf Befehle vorschlagen. Jeder Befehl wartet auf deine Freigabe.</p></div><span id="ai-state" class="chip">Nicht verbunden</span></div>
+        <details class="ai-settings">
+          <summary>KI-Verbindung einrichten</summary>
+          <form id="ai-settings-form">
+            <label for="ai-base-url">OpenAI-kompatible API-Basisadresse</label>
+            <input id="ai-base-url" placeholder="https://api.openai.com/v1" required>
+            <label for="ai-model">Modell</label>
+            <input id="ai-model" placeholder="z. B. gpt-4o-mini" required>
+            <label for="ai-api-key">API-Key <small>(leer lassen, um den gespeicherten Key zu behalten)</small></label>
+            <input id="ai-api-key" type="password" autocomplete="new-password" placeholder="API-Key (optional für lokale Modelle)">
+            <label class="checkbox-row"><input id="ai-clear-key" type="checkbox"> Gespeicherten API-Key löschen</label>
+            <button class="button primary" type="submit">Verbindung speichern</button>
+            <small>Unterstützt OpenAI-kompatible Anbieter, z. B. lokale Ollama-Modelle. Der Key wird lokal auf dem Proxmox-Host gespeichert.</small>
+          </form>
+        </details>
+        <div id="ai-messages" class="ai-messages"><div class="ai-message system">Verbinde ein Modell, dann kannst du Fragen stellen oder um eine Diagnose bitten.</div></div>
+        <div id="ai-pending" class="ai-pending"></div>
+        <form id="ai-form" class="ai-form">
+          <textarea id="ai-prompt" rows="2" placeholder="Frag die KI zu diesem CT / dieser VM …" aria-label="Nachricht an die KI" disabled></textarea>
+          <button id="ai-send" class="button primary" type="submit" disabled>Senden</button>
+        </form>
+        <button id="ai-clear" class="text-button" type="button">Chat leeren</button>
+      </article>
+    </section>
+    <details class="card guest-files">
+      <summary>Datei-Explorer und Drag-and-drop</summary>
+      <div class="explorer-toolbar">
+        <button id="file-up" class="button" type="button">↑ Übergeordnet</button>
+        <div id="file-path" class="file-path">/</div>
+        <label class="button primary" for="guest-file-input">Dateien hochladen</label>
+        <input id="guest-file-input" type="file" multiple hidden>
+      </div>
+      <div id="guest-dropzone" class="guest-dropzone"><p>Dateien hier ablegen oder Upload wählen</p><div id="file-progress"></div></div>
+      <div class="file-table-wrap"><table class="file-table"><thead><tr><th>NAME</th><th>TYP</th><th>GRÖSSE</th><th>GEÄNDERT</th><th></th></tr></thead><tbody id="guest-file-table"><tr><td colspan="5" class="empty">Öffne einen laufenden Gast, um Dateien zu laden.</td></tr></tbody></table></div>
+    </details>
+    <footer>ProxmoxController · <span id="guest-updated">Daten werden geladen</span></footer>
+  </main>
+  <script src="/static/guest.js?v=20261016-5" defer></script>
+</body>
+</html>

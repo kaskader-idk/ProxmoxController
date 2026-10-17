@@ -18,3 +18,28 @@ main{width:calc(100% - 238px);max-width:none;padding:28px clamp(24px,3vw,54px) 2
 @media(max-width:1000px){.detail-grid{grid-template-columns:1fr 1fr}.network-card{grid-column:1/-1}.guest-workspace{grid-template-columns:1fr}.terminal-output{height:320px}}
 @media(max-width:1000px){.system-info-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.detail-grid{grid-template-columns:1fr}.network-card{grid-column:auto}.reservation-grid,.guest-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.guest-main{padding:16px 12px}.guest-page-header{align-items:flex-start}.guest-page-header .header-right{max-width:48%}.guest-workspace{grid-template-columns:1fr}.terminal-form{flex-wrap:wrap}.terminal-form input{order:3;flex-basis:100%}.guest-cpu-cell{min-width:160px}.guest-actions{flex-direction:column}.guest-main .guest-page-header h1{font-size:24px}.system-info-grid{grid-template-columns:1fr 1fr}.disk-space-item>div:first-child{align-items:flex-start;flex-direction:column;gap:3px}}
+
+/* Plain, compact dashboard styling */
+:root{--bg:#11161c;--panel:#191f26;--line:#303943;--muted:#aab3bd;--soft:#c6ced7;--accent:#92a8bf;--green:#72c69b;--orange:#d9ac72;--blue:#88b1d1}
+body{background:var(--bg)}
+.sidebar{background:#12171d}
+.brand-icon{border-radius:4px;background:#d1d8df;color:#11161c}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:5px;box-shadow:none}
+.metric{min-height:120px}
+.metric-icon{border-radius:4px}
+.nav,.button,.action-btn,.logout-button,.icon-button{border-radius:4px;box-shadow:none}
+.nav.active{background:#26313b;color:#f3f6f8}
+.nav.active span{color:#c7d8e8}
+.live{border-radius:4px}
+.chip,.type-pill{border-radius:3px}
+.meter{border-radius:1px;background:#2a323b}
+.meter i{border-radius:1px;transition:none}
+.storage-grid{gap:8px}
+.fs-card,.detail-card,.reserve-card,.core-card,.system-info-card{border-radius:5px;box-shadow:none}
+td{font-size:12px}
+th{font-size:10px}
+button{box-shadow:none}
+.terminal-output{border-radius:4px;box-shadow:none}
+.ai-message,.approval-card,.guest-dropzone,.file-path,.system-info-grid>div,.reservation-grid>div{border-radius:4px;box-shadow:none}
+#updated,.sidebar-bottom,.metric-meta,.sub-cell{font-size:11px}
+@media(max-width:700px){.metrics-grid{gap:8px}.guest-metric-grid{gap:8px}main{padding:16px 12px}}

@@ -16,8 +16,8 @@ Ein Web-Dashboard für deinen Proxmox-VE-Host. Es zeigt die Auslastung des Hosts
 - Eigene Detailseite für jeden CT/jede VM mit Gast-Auslastung, Datei-Explorer, Download, Drag-and-drop-Upload und Shell-Befehlen
 - Optionaler KI-Assistent mit OpenAI-kompatibler API. Jeder KI-Befehl muss vor Ausführung einzeln bestätigt werden.
 - Paket-Suche: installierte Pakete durchsuchen und bei nicht installierten Paketen APT-Vorschläge anzeigen
-- Aktualisierung der Live-Daten ungefähr einmal pro Sekunde
-- Normale Login-Seite statt Browser-Anmelde-Popup; Sitzung läuft nach 12 Stunden ab
+- Aktualisierung der Live-Daten alle zwei Sekunden; die Gast-Detailseite aktualisiert sich alle fünf Sekunden
+- Keine Login-Seite; der Zugriff ist auf Heimnetz und Tailscale begrenzt
 
 ## Voraussetzungen
 
@@ -61,7 +61,7 @@ proxmoxcontroller@pve!dashboard=HIER_DAS_TOKEN_SECRET
 pveum role modify ProxmoxController --privs "Sys.Audit Datastore.Audit VM.Audit VM.PowerMgmt VM.GuestAgent.Unrestricted"
 ```
 
-`VM.GuestAgent.Unrestricted` wird für den VM-Datei-Explorer benötigt. Es erlaubt weitreichende Befehle in einer VM, wenn deren Guest Agent läuft. Schütze deshalb das Token und das Dashboard-Passwort. CT-Dateizugriff verwendet eine separate, auf ein Hilfsskript beschränkte sudoers-Regel.
+`VM.GuestAgent.Unrestricted` wird für den VM-Datei-Explorer benötigt. Es erlaubt weitreichende Befehle in einer VM, wenn deren Guest Agent läuft. CT-Dateizugriff verwendet eine separate, auf ein Hilfsskript beschränkte sudoers-Regel. Das Web-Dashboard hat absichtlich keine Anmeldung; der Zugriff wird deshalb auf konfigurierte private Netzwerke begrenzt. Stelle Port 8787 nicht ins öffentliche Internet.
 
 ## 2. Repository herunterladen und installieren
 
@@ -129,18 +129,16 @@ cp .env.example /etc/default/proxmox-controller
 nano /etc/default/proxmox-controller
 ```
 
-Mindestens diese drei Werte prüfen:
+Diese Werte prüfen:
 
 ```text
 PVE_NODE=kamilsServer
 PVE_API_TOKEN=proxmoxcontroller@pve!dashboard=HIER_DAS_TOKEN_SECRET
-APP_PASSWORD=HIER_EIN_LANGES_EIGENES_PASSWORT
 ```
 
 - `PVE_NODE`: den Namen des Proxmox-Knotens verwenden. Anzeigen mit `hostname` oder in **Datacenter → Nodes**.
 - `PVE_API_TOKEN`: den vollständigen Token-Wert einsetzen, inklusive `=SECRET`.
-- `APP_USER` und `APP_PASSWORD`: Benutzername und Passwort für die Login-Seite des Dashboards selbst wählen.
-- `APP_SESSION_SECRET`: Optionaler geheimer Schlüssel zum Signieren der Login-Sitzung. Erzeugen mit `openssl rand -hex 32`. Wenn leer, wird `APP_PASSWORD` verwendet.
+- `APP_ALLOWED_NETWORKS`: erlaubte Quellnetze, standardmäßig `127.0.0.1/32,::1/128,192.168.178.0/24,100.64.0.0/10`. Der Standard erlaubt localhost, das Heimnetz `192.168.178.x` und Tailscale.
 - `PVE_CA_CERT`: Zertifikat für die sichere Verbindung zur lokalen Proxmox-API. Standardmäßig `/etc/pve/pve-root-ca.pem`.
 
 Anschließend die Konfigurationsdatei schützen:
@@ -179,7 +177,7 @@ Dashboard im Browser öffnen:
 http://IP-DEINES-PROXMOX-HOSTS:8787
 ```
 
-Melde dich mit `APP_USER` und `APP_PASSWORD` an. Die IP-Adresse findest du auf dem Proxmox-Host mit `hostname -I`.
+Eine Anmeldung ist nicht nötig. Öffne die angezeigte Host-IP mit Port `8787`. Das Gerät muss im Heimnetz `192.168.178.x` oder in deinem Tailscale-Netz sein. Die IP-Adresse findest du mit `hostname -I`.
 
 ## 5. QEMU Guest Agent in VMs einschalten
 
@@ -261,7 +259,7 @@ journalctl -u proxmox-controller -f
 
 ## Netzwerk und Sicherheit
 
-Der Dienst lauscht standardmäßig auf `0.0.0.0:8787` und zeigt vor dem Dashboard eine Login-Seite. Nach erfolgreichem Login wird eine signierte, HTTP-only Sitzung im Browser-Cookie gespeichert; sie läuft nach 12 Stunden ab. Über **Abmelden** wird das Cookie gelöscht. Verwende den Port nur im vertrauenswürdigen LAN oder über Tailscale. Für Zugriff aus dem Internet einen TLS-Reverse-Proxy verwenden und Port 8787 nicht direkt öffentlich freigeben. Proxmox-Token, Dashboard-Passwort, Sitzungsschlüssel und `/etc/default/proxmox-controller` geheim halten.
+Der Dienst lauscht standardmäßig auf `0.0.0.0:8787`, nimmt Anfragen aber nur aus den konfigurierten Netzen an. Standardmäßig sind localhost, das Heimnetz `192.168.178.0/24` und Tailscale `100.64.0.0/10` erlaubt. Da es keine Anmeldung gibt, können Geräte in diesen Netzen CTs/VMs steuern, Dateien übertragen und Shell-Befehle im Gast ausführen. Gib Port 8787 nicht per Router oder öffentlichem Reverse-Proxy frei. Proxmox-API-Token und `/etc/default/proxmox-controller` geheim halten.
 
 ## Einstellbare Werte
 
@@ -272,9 +270,7 @@ Der Dienst lauscht standardmäßig auf `0.0.0.0:8787` und zeigt vor dem Dashboar
 | `PVE_API_TOKEN` | – | Proxmox API-Token |
 | `PVE_CA_CERT` | `/etc/pve/pve-root-ca.pem` | Zertifikat für TLS-Prüfung |
 | `PVE_TLS_VERIFY` | `true` | TLS-Zertifikat überprüfen |
-| `APP_USER` | `admin` | Dashboard-Benutzername |
-| `APP_PASSWORD` | – | Dashboard-Passwort |
-| `APP_SESSION_SECRET` | APP_PASSWORD | Optionaler Schlüssel zum Signieren von Sitzungen |
+| `APP_ALLOWED_NETWORKS` | localhost, `192.168.178.0/24`, `100.64.0.0/10` | Netze, aus denen die Website erreichbar ist |
 | `MAX_VM_FILE_BYTES` | `8388608` | Maximale VM-Dateigröße in Bytes |
 | `MAX_CT_FILE_BYTES` | `536870912` | Maximale CT-Dateigröße, höchstens 512 MiB |
 | `HOST` / `PORT` | `0.0.0.0` / `8787` | Adresse und Port des Webservers |

@@ -7,7 +7,6 @@ const bytes=n=>{n=Number(n)||0;if(n<1)return '—';const u=['B','KB','MB','GB','
 function setError(message){const el=$('#guest-error');el.textContent=message||'';el.classList.toggle('hidden',!message);}
 async function api(url,options={}){
  const response=await fetch(url,{cache:'no-store',...options});
- if(response.status===401){location.assign('/login');throw new Error('Anmeldung abgelaufen');}
  const data=await response.json().catch(()=>({detail:response.statusText}));
  if(!response.ok)throw new Error(data.detail||response.statusText);
  return data;
@@ -172,4 +171,4 @@ async function uploadFiles(list){
 }
 $('#guest-refresh').addEventListener('click',loadGuest);
 if(!['qemu','lxc'].includes(kind)||!Number.isInteger(vmid)){setError('Ungültige Gastadresse.');}
-else{loadGuest();loadAISettings();setInterval(loadGuest,3000);}
+else{loadGuest();loadAISettings();setInterval(loadGuest,5000);}

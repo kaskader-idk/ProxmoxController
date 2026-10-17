@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
+import ipaddress
 import json
 import mimetypes
 import os
@@ -15,8 +14,8 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 import psutil
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -28,11 +27,13 @@ PVE_NODE = os.getenv("PVE_NODE", socket.gethostname())
 PVE_TOKEN = os.getenv("PVE_API_TOKEN", "")
 PVE_CA_CERT = os.getenv("PVE_CA_CERT", "/etc/pve/pve-root-ca.pem")
 PVE_TLS_VERIFY = os.getenv("PVE_TLS_VERIFY", "true").lower() not in {"0", "false", "no"}
-APP_USER = os.getenv("APP_USER", "")
-APP_PASSWORD = os.getenv("APP_PASSWORD", "")
-APP_SESSION_SECRET = os.getenv("APP_SESSION_SECRET") or APP_PASSWORD
-SESSION_COOKIE = "proxmox_controller_session"
-SESSION_TTL = 12 * 60 * 60
+APP_ALLOWED_NETWORKS = tuple(
+    ipaddress.ip_network(value.strip(), strict=False)
+    for value in os.getenv(
+        "APP_ALLOWED_NETWORKS",
+        "127.0.0.1/32,::1/128,192.168.178.0/24,100.64.0.0/10",
+    ).split(",") if value.strip()
+)
 AI_SETTINGS_PATH = Path(os.getenv("AI_SETTINGS_PATH", "/var/lib/proxmox-controller/ai-settings.json"))
 
 
@@ -55,6 +56,29 @@ app = FastAPI(title="ProxmoxController", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 _CACHE: dict[str, tuple[float, Any]] = {}
 _RATE_STATE: dict[str, tuple[float, Any]] = {}
+_PVE_CLIENT: httpx.Client | None = None
+
+
+@app.middleware("http")
+async def restrict_network(request: Request, call_next):
+    """Keep the unauthenticated admin UI reachable only from configured private networks."""
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = request.headers.get("origin")
+        if origin and urlsplit(origin).netloc.lower() != request.headers.get("host", "").lower():
+            return JSONResponse({"detail": "Cross-Origin-Anfrage blockiert."}, status_code=403)
+    address = request.client.host if request.client else ""
+    try:
+        client_ip = ipaddress.ip_address(address)
+        if getattr(client_ip, "ipv4_mapped", None):
+            client_ip = client_ip.ipv4_mapped
+    except ValueError:
+        client_ip = None
+    if client_ip is None or not any(
+        client_ip.version == network.version and client_ip in network
+        for network in APP_ALLOWED_NETWORKS
+    ):
+        return JSONResponse({"detail": "Zugriff aus diesem Netzwerk ist nicht erlaubt."}, status_code=403)
+    return await call_next(request)
 
 
 def rate(value: float, key: str, now: float) -> float:
@@ -86,6 +110,14 @@ def cpu_temperatures() -> list[dict[str, Any]]:
     return readings
 
 
+def cpu_frequencies_mhz() -> list[float | None]:
+    try:
+        frequencies = psutil.cpu_freq(percpu=True) or []
+        return [round(float(item.current), 0) if item and item.current else None for item in frequencies]
+    except (AttributeError, NotImplementedError, OSError, psutil.Error):
+        return []
+
+
 def host_io_rates() -> dict[str, Any]:
     now = time.monotonic()
     disk = psutil.disk_io_counters()
@@ -102,57 +134,28 @@ def host_io_rates() -> dict[str, Any]:
         network.append({"name": name, "rx_bytes_sec": rx, "tx_bytes_sec": tx})
     return {"disk_io": disk_data, "network": network}
 
-
-
-def _session_signature(timestamp: str) -> str:
-    message = f"{APP_USER}:{timestamp}".encode()
-    return hmac.new(APP_SESSION_SECRET.encode(), message, hashlib.sha256).hexdigest()
-
-
-def is_authenticated(request: Request) -> bool:
-    if not APP_USER or not APP_PASSWORD or not APP_SESSION_SECRET:
-        return False
-    value = request.cookies.get(SESSION_COOKIE, "")
-    try:
-        timestamp, signature = value.split(".", 1)
-        created = int(timestamp)
-    except (ValueError, TypeError):
-        return False
-    now = int(time.time())
-    if created > now + 30 or now - created > SESSION_TTL:
-        return False
-    return hmac.compare_digest(signature, _session_signature(timestamp))
-
-
-def require_login(request: Request) -> str:
-    if not is_authenticated(request):
-        raise HTTPException(status_code=401, detail="Anmeldung erforderlich")
-    return APP_USER
-
-
-def login_page(error: str = "") -> str:
-    page = (APP_DIR / "static" / "login.html").read_text(encoding="utf-8")
-    if not APP_USER or not APP_PASSWORD:
-        error = "APP_USER und APP_PASSWORD sind noch nicht in /etc/default/proxmox-controller gesetzt."
-    message = f'<div class="login-error" role="alert">{error}</div>' if error else ""
-    return page.replace("<!--LOGIN_ERROR-->", message)
-
-
 def _pve_client() -> httpx.Client:
+    global _PVE_CLIENT
     if not PVE_TOKEN:
         raise HTTPException(status_code=503, detail="PVE_API_TOKEN ist nicht konfiguriert")
-    verify: bool | str = PVE_CA_CERT if PVE_TLS_VERIFY and Path(PVE_CA_CERT).exists() else PVE_TLS_VERIFY
-    return httpx.Client(base_url=PVE_API, headers={"Authorization": f"PVEAPIToken={PVE_TOKEN}"}, verify=verify, timeout=8.0)
+    if _PVE_CLIENT is None:
+        verify: bool | str = PVE_CA_CERT if PVE_TLS_VERIFY and Path(PVE_CA_CERT).exists() else PVE_TLS_VERIFY
+        _PVE_CLIENT = httpx.Client(
+            base_url=PVE_API,
+            headers={"Authorization": f"PVEAPIToken={PVE_TOKEN}"},
+            verify=verify,
+            timeout=8.0,
+        )
+    return _PVE_CLIENT
 
 
 def pve(path: str, method: str = "GET", *, params: dict[str, Any] | None = None,
         form: Sequence[tuple[str, str]] | None = None) -> Any:
     try:
-        with _pve_client() as client:
-            response = client.request(method, path, params=params, data=form)
-            response.raise_for_status()
-            payload = response.json()
-            return payload.get("data", payload)
+        response = _pve_client().request(method, path, params=params, data=form)
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get("data", payload)
     except HTTPException:
         raise
     except httpx.HTTPStatusError as exc:
@@ -302,64 +305,19 @@ def guest_file_operation(kind: str, vmid: int, operation: str, path: str, data: 
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request) -> Response:
-    if not is_authenticated(request):
-        return RedirectResponse("/login", status_code=303)
+def index() -> Response:
     return HTMLResponse((APP_DIR / "static" / "index.html").read_text(encoding="utf-8"))
 
 
-@app.get("/login", response_class=HTMLResponse)
-def login_form(request: Request) -> Response:
-    if is_authenticated(request):
-        return RedirectResponse("/", status_code=303)
-    return HTMLResponse(login_page())
-
-
-@app.post("/login")
-async def login(request: Request) -> Response:
-    try:
-        form = await request.form()
-    except Exception:
-        return HTMLResponse(login_page("Das Formular konnte nicht gelesen werden. Bitte Seite neu laden."))
-
-    username = str(form.get("username", ""))
-    password = str(form.get("password", ""))
-    user_ok = hmac.compare_digest(username.encode(), APP_USER.encode())
-    password_ok = hmac.compare_digest(password.encode(), APP_PASSWORD.encode())
-    if not APP_USER or not APP_PASSWORD:
-        return HTMLResponse(login_page("APP_USER und APP_PASSWORD fehlen in /etc/default/proxmox-controller."))
-    if not (user_ok and password_ok):
-        return HTMLResponse(login_page("Benutzername oder Passwort ist falsch."))
-    timestamp = str(int(time.time()))
-    value = f"{timestamp}.{_session_signature(timestamp)}"
-    response = RedirectResponse("/", status_code=303)
-    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
-    response.set_cookie(
-        SESSION_COOKIE, value, max_age=SESSION_TTL, httponly=True,
-        secure=request.url.scheme == "https" or forwarded_proto == "https",
-        samesite="lax", path="/",
-    )
-    return response
-
-
-@app.post("/logout")
-def logout() -> Response:
-    response = RedirectResponse("/login", status_code=303)
-    response.delete_cookie(SESSION_COOKIE, path="/")
-    return response
-
-
 @app.get("/guest/{kind}/{vmid}", response_class=HTMLResponse)
-def guest_page(kind: str, vmid: int, request: Request) -> Response:
-    if not is_authenticated(request):
-        return RedirectResponse("/login", status_code=303)
+def guest_page(kind: str, vmid: int) -> Response:
     if kind not in {"qemu", "lxc"} or vmid < 100:
         raise HTTPException(status_code=404, detail="CT/VM nicht gefunden")
     return HTMLResponse((APP_DIR / "static" / "guest.html").read_text(encoding="utf-8"))
 
 
 @app.get("/api/overview")
-def overview(_: str = Depends(require_login)) -> dict[str, Any]:
+def overview() -> dict[str, Any]:
     try:
         node = pve(f"/nodes/{PVE_NODE}/status")
         guests = all_guests()
@@ -384,7 +342,7 @@ def overview(_: str = Depends(require_login)) -> dict[str, Any]:
         for row in guest_rows:
             if row.get("type") == "lxc":
                 row["cpu_affinity"] = lxc_sets.get(str(row.get("vmid")))
-        core_percent = psutil.cpu_percent(interval=0.10, percpu=True)
+        core_percent = psutil.cpu_percent(interval=None, percpu=True)
         partitions = cached("partitions", 5, lambda: psutil.disk_partitions(all=False))
         disks = []
         for part in partitions:
@@ -393,17 +351,11 @@ def overview(_: str = Depends(require_login)) -> dict[str, Any]:
                               **psutil.disk_usage(part.mountpoint)._asdict()})
             except (OSError, psutil.Error):
                 continue
-        try:
-            frequencies = psutil.cpu_freq(percpu=True) or []
-            cpu_frequencies = [round(float(item.current), 0) if item and item.current else None for item in frequencies]
-        except (AttributeError, OSError, psutil.Error):
-            cpu_frequencies = []
         host = cached("host-slow", 5, lambda: {
             "memory": psutil.virtual_memory()._asdict(),
             "disks": disks,
             "block_devices": host_disks(),
             "gpu": command(["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"]),
-            "packages": command(["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Status}\n"]),
         })
         cpu_count = len(core_percent) or psutil.cpu_count(logical=True) or 1
         memory = host.get("memory", {})
@@ -418,7 +370,9 @@ def overview(_: str = Depends(require_login)) -> dict[str, Any]:
                     "memory_unallocated": max(0, int(memory.get("total", 0)) - assigned_memory),
                     "memory_available": int(memory.get("available", 0)),
                 },
-                "host": {**host, **io_rates, "cpu_temperature": cpu_temperatures(), "cpu_frequencies_mhz": cpu_frequencies,
+                "host": {**host, **io_rates,
+                         "cpu_temperature": cached("cpu-temperature", 5, cpu_temperatures),
+                         "cpu_frequencies_mhz": cached("cpu-frequencies", 5, cpu_frequencies_mhz),
                          "cpu_percent": sum(core_percent) / len(core_percent) if core_percent else 0,
                          "cpu_cores_percent": core_percent, "cpu_cores": cpu_count}}
     except HTTPException:
@@ -428,7 +382,7 @@ def overview(_: str = Depends(require_login)) -> dict[str, Any]:
 
 
 @app.post("/api/guest/{kind}/{vmid}/action/{action}")
-def guest_action(kind: str, vmid: int, action: str, _: str = Depends(require_login)) -> dict[str, Any]:
+def guest_action(kind: str, vmid: int, action: str) -> dict[str, Any]:
     if kind not in {"qemu", "lxc"} or action not in {"start", "stop", "shutdown", "reboot"}:
         raise HTTPException(status_code=400, detail="Ungültige Aktion")
     guests = all_guests()
@@ -483,8 +437,7 @@ def run_vm_command(node: str, vmid: int, command_text: str) -> dict[str, Any]:
 
 
 @app.post("/api/guest/{kind}/{vmid}/command")
-def guest_command(kind: str, vmid: int, body: GuestCommandRequest,
-                  _: str = Depends(require_login)) -> dict[str, Any]:
+def guest_command(kind: str, vmid: int, body: GuestCommandRequest) -> dict[str, Any]:
     if not body.command.strip() or "\x00" in body.command:
         raise HTTPException(status_code=400, detail="Der Befehl ist leer oder ungültig.")
     guest = guest_for(kind, vmid)
@@ -494,7 +447,7 @@ def guest_command(kind: str, vmid: int, body: GuestCommandRequest,
 
 
 @app.get("/api/guest/{kind}/{vmid}/files")
-def list_guest_files(kind: str, vmid: int, path: str = Query("/"), _: str = Depends(require_login)) -> dict[str, Any]:
+def list_guest_files(kind: str, vmid: int, path: str = Query("/")) -> dict[str, Any]:
     raw = guest_file_operation(kind, vmid, "list", path)
     try:
         return json.loads(raw)
@@ -503,7 +456,7 @@ def list_guest_files(kind: str, vmid: int, path: str = Query("/"), _: str = Depe
 
 
 @app.get("/api/guest/{kind}/{vmid}/file")
-def download_guest_file(kind: str, vmid: int, path: str = Query(...), _: str = Depends(require_login)) -> Response:
+def download_guest_file(kind: str, vmid: int, path: str = Query(...)) -> Response:
     raw_path = guest_path(path)
     data = guest_file_operation(kind, vmid, "read", raw_path)
     filename = Path(raw_path).name or "download"
@@ -512,8 +465,8 @@ def download_guest_file(kind: str, vmid: int, path: str = Query(...), _: str = D
 
 
 @app.post("/api/guest/{kind}/{vmid}/files")
-async def upload_guest_files(kind: str, vmid: int, path: str = Query("/"), files: list[UploadFile] = File(...),
-                             _: str = Depends(require_login)) -> dict[str, Any]:
+async def upload_guest_files(kind: str, vmid: int, path: str = Query("/"),
+                             files: list[UploadFile] = File(...)) -> dict[str, Any]:
     base = guest_path(path)
     max_size = MAX_CT_FILE_BYTES if kind == "lxc" else MAX_VM_FILE_BYTES
     saved = []
@@ -561,14 +514,14 @@ def save_ai_settings(settings: dict[str, str]) -> None:
 
 
 @app.get("/api/ai/settings")
-def get_ai_settings(_: str = Depends(require_login)) -> dict[str, Any]:
+def get_ai_settings() -> dict[str, Any]:
     settings = load_ai_settings()
     return {"base_url": settings["base_url"], "model": settings["model"],
             "configured": bool(settings["base_url"] and settings["model"])}
 
 
 @app.post("/api/ai/settings")
-def update_ai_settings(body: AISettingsRequest, _: str = Depends(require_login)) -> dict[str, Any]:
+def update_ai_settings(body: AISettingsRequest) -> dict[str, Any]:
     base_url = body.base_url.strip().rstrip("/")
     parsed = urlsplit(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
@@ -580,7 +533,7 @@ def update_ai_settings(body: AISettingsRequest, _: str = Depends(require_login))
 
 
 @app.post("/api/ai/chat")
-def ai_chat(body: AIChatRequest, _: str = Depends(require_login)) -> dict[str, Any]:
+def ai_chat(body: AIChatRequest) -> dict[str, Any]:
     settings = load_ai_settings()
     if not settings["base_url"] or not settings["model"]:
         raise HTTPException(status_code=409, detail="Bitte zuerst API-Basisadresse und Modell in den KI-Einstellungen eintragen.")
@@ -628,13 +581,21 @@ def ai_chat(body: AIChatRequest, _: str = Depends(require_login)) -> dict[str, A
     return {"message": choices[0].get("message", {})}
 
 
+@app.get("/api/packages/installed")
+def installed_packages() -> dict[str, str]:
+    raw = cached(
+        "installed-packages", 30,
+        lambda: command(["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Status}\n"], timeout=15),
+    )
+    return {"packages": raw}
+
+
 @app.get("/api/packages/search")
-def search_packages(q: str = Query(min_length=1, max_length=100),
-                    _: str = Depends(require_login)) -> dict[str, Any]:
+def search_packages(q: str = Query(min_length=1, max_length=100)) -> dict[str, Any]:
     query = q.strip()
     if not query or any(ord(char) < 32 for char in query):
         raise HTTPException(status_code=400, detail="Ungültiger Suchbegriff.")
-    raw = command(["apt-cache", "search", "--names-only", query], timeout=8)
+    raw = cached(f"apt-search:{query.lower()}", 30, lambda: command(["apt-cache", "search", "--names-only", query], timeout=8))
     suggestions = []
     for line in raw.splitlines()[:30]:
         name, separator, description = line.partition(" - ")

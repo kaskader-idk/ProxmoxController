@@ -64,8 +64,13 @@ async def restrict_network(request: Request, call_next):
     """Keep the unauthenticated admin UI reachable only from configured private networks."""
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         origin = request.headers.get("origin")
-        if origin and urlsplit(origin).netloc.lower() != request.headers.get("host", "").lower():
-            return JSONResponse({"detail": "Cross-Origin-Anfrage blockiert."}, status_code=403)
+        if origin:
+            try:
+                origin_host = urlsplit(origin).netloc.lower()
+            except ValueError:
+                origin_host = ""
+            if not origin_host or origin_host != request.headers.get("host", "").lower():
+                return JSONResponse({"detail": "Cross-Origin-Anfrage blockiert."}, status_code=403)
     address = request.client.host if request.client else ""
     try:
         client_ip = ipaddress.ip_address(address)
